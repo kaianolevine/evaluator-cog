@@ -4982,13 +4982,25 @@ def check_test_structure(
 
 
 def check_prefect_serve_pattern(repo_path: Path) -> list[Finding]:
-    """CD-015: Prefect serve() — no work pool."""
-    CHECK_ID = "CD-015"
+    """CD-015: Prefect serve() — no work pool.
+
+    Detects three equivalent serve() call shapes:
+
+      1. prefect.serve(...)
+      2. flow.serve(...)
+      3. ``from prefect import serve`` followed by ``serve(...)``
+
+    Also flags incompatible patterns: flow.deploy(), work_pool_name
+    references, and work_pool: in prefect.yaml.
+    """
     findings = []
     src = repo_path / "src"
     if not src.is_dir():
         return findings
-    content = "\n".join(f.read_text() for f in src.rglob("*.py"))
+
+    content = "\n".join(f.read_text(errors="replace") for f in src.rglob("*.py"))
+
+    # Incompatible patterns.
     if "flow.deploy(" in content or "work_pool_name" in content:
         findings.append(
             _finding(
@@ -5010,14 +5022,30 @@ def check_prefect_serve_pattern(repo_path: Path) -> list[Finding]:
                 "Remove work pool config and use prefect.serve() instead.",
             )
         )
-    if "prefect.serve(" not in content and "flow.serve(" not in content:
+
+    # Accepted serve patterns.
+    has_qualified_serve = "prefect.serve(" in content or "flow.serve(" in content
+    # ``from prefect import serve`` (optionally with other names) followed
+    # anywhere by a bare ``serve(`` call.
+    imports_serve = bool(
+        re.search(
+            r"from\s+prefect\s+import\s+[^\n]*\bserve\b",
+            content,
+        )
+    )
+    has_bare_serve_call = bool(re.search(r"(?:^|[\s(=,])serve\s*\(", content))
+    has_imported_serve = imports_serve and has_bare_serve_call
+
+    if not (has_qualified_serve or has_imported_serve):
         findings.append(
             _finding(
                 "CD-015",
                 "WARN",
                 "cd_readiness",
-                "No prefect.serve() call found in source — flow registration pattern missing or unverifiable.",
-                "Ensure flows are registered via prefect.serve() at the cog entry point.",
+                "No prefect.serve() call found in source — flow registration "
+                "pattern missing or unverifiable.",
+                "Ensure flows are registered via prefect.serve() (or "
+                "`from prefect import serve; serve(...)`) at the cog entry point.",
             )
         )
     return findings

@@ -505,3 +505,53 @@ def test_pipe_006_does_not_accept_logger_function_without_run_logger(
         "    logger.info('hello')\n"
     )
     assert len(check_prefect_run_logger(tmp_path)) == 1
+
+
+# --- CD-015 -------------------------------------------------------------------
+
+
+def test_cd_015_accepts_from_prefect_import_serve(tmp_path: Path) -> None:
+    """CD-015: `from prefect import serve` then `serve(...)` is accepted."""
+    from evaluator_cog.engine.deterministic import check_prefect_serve_pattern
+
+    src = tmp_path / "src" / "mycog"
+    src.mkdir(parents=True)
+    (src / "main.py").write_text(
+        "from prefect import serve\n"
+        "from .flow_mod import my_flow\n"
+        "\n"
+        "def main():\n"
+        "    serve(my_flow.to_deployment(name='x'))\n"
+    )
+    warn_findings = [
+        f for f in check_prefect_serve_pattern(tmp_path) if f.get("severity") == "WARN"
+    ]
+    assert warn_findings == []
+
+
+def test_cd_015_still_warns_when_no_serve(tmp_path: Path) -> None:
+    """CD-015: repo with no serve() call at all is still flagged."""
+    from evaluator_cog.engine.deterministic import check_prefect_serve_pattern
+
+    src = tmp_path / "src" / "mycog"
+    src.mkdir(parents=True)
+    (src / "main.py").write_text("def main(): pass\n")
+    warn_findings = [
+        f for f in check_prefect_serve_pattern(tmp_path) if f.get("severity") == "WARN"
+    ]
+    assert len(warn_findings) == 1
+
+
+def test_cd_015_still_catches_work_pool(tmp_path: Path) -> None:
+    """CD-015: flow.deploy() and work_pool_name still flagged as incompatible."""
+    from evaluator_cog.engine.deterministic import check_prefect_serve_pattern
+
+    src = tmp_path / "src" / "mycog"
+    src.mkdir(parents=True)
+    (src / "main.py").write_text(
+        "def main():\n    flow.deploy(work_pool_name='default')\n"
+    )
+    errors = [
+        f for f in check_prefect_serve_pattern(tmp_path) if f.get("severity") == "ERROR"
+    ]
+    assert len(errors) >= 1
