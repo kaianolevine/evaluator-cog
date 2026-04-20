@@ -1,3 +1,10 @@
+## [3.11.5](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.4...v3.11.5) (2026-04-20)
+
+
+### Bug Fixes
+
+* api false positive detection ([f8580e6](https://github.com/mini-app-polis/evaluator-cog/commit/f8580e69d4c5c82e5e08e73aeea3bff5f7473872))
+
 ## [3.11.4](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.3...v3.11.4) (2026-04-20)
 
 
