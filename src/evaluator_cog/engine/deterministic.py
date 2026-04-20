@@ -2253,6 +2253,12 @@ def check_owner_id_column(repo_path: Path) -> list[Finding]:
     # Variable names that hint a model is internal/lookup and exempt.
     exempt_suffixes = ("_lookup", "_config", "_enum", "Lookup", "Config", "Enum")
 
+    # Class names that are the SQLAlchemy declarative root itself, not a
+    # table. These inherit from DeclarativeBase or declarative_base() and
+    # exist to serve as the base for every real model — they have no
+    # columns of their own.
+    abstract_root_names = {"Base", "DeclarativeBase", "Model"}
+
     for py_file in src.rglob("*.py"):
         try:
             text = py_file.read_text()
@@ -2262,6 +2268,9 @@ def check_owner_id_column(repo_path: Path) -> list[Finding]:
         rel = py_file.relative_to(repo_path)
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
+                continue
+            # Skip the SQLAlchemy declarative root itself.
+            if node.name in abstract_root_names:
                 continue
             # Heuristic: class is a SQLAlchemy model if it inherits from a
             # class ending in Base or DeclarativeBase.
