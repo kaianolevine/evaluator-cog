@@ -2241,8 +2241,26 @@ def check_response_envelope_presence(repo_path: Path) -> list[Finding]:
 
 
 def check_owner_id_column(repo_path: Path) -> list[Finding]:
-    """API-006: SQLAlchemy models carry owner_id."""
-    CHECK_ID = "API-006"
+    """API-006: Every table is authorization-scoped to a Clerk user.
+
+    Three patterns satisfy this:
+
+    1. Direct ownership — the table has an ``owner_id`` column holding the
+       Clerk user ID of the row's owner. Majority case.
+
+    2. Identity table — the table IS the user; its primary key IS the user
+       identifier. Detected by: primary-key column named ``user_id`` (or
+       class ends in ``Profile``/``Identity``/``User``).
+
+    3. Relationship table — the row represents a relationship to a user,
+       using a ``user_id`` column that carries a ``ForeignKey`` to an
+       identity table. Detected by: ``user_id`` column with a ``ForeignKey``
+       argument in its ``mapped_column(...)`` / ``Column(...)`` call.
+
+    Existing exemptions by class-name suffix (``_lookup``, ``_config``,
+    ``_enum``) continue to apply. The SQLAlchemy declarative root
+    (``Base``, ``DeclarativeBase``, ``Model``) is skipped.
+    """
     import ast
 
     findings: list[Finding] = []
@@ -2253,11 +2271,66 @@ def check_owner_id_column(repo_path: Path) -> list[Finding]:
     # Variable names that hint a model is internal/lookup and exempt.
     exempt_suffixes = ("_lookup", "_config", "_enum", "Lookup", "Config", "Enum")
 
+    # Class names suggesting the model is the user identity itself.
+    identity_class_suffixes = ("Profile", "Identity", "User")
+
     # Class names that are the SQLAlchemy declarative root itself, not a
     # table. These inherit from DeclarativeBase or declarative_base() and
     # exist to serve as the base for every real model — they have no
     # columns of their own.
     abstract_root_names = {"Base", "DeclarativeBase", "Model"}
+
+    def _column_call_kwargs(value: ast.AST) -> list[ast.keyword]:
+        """For a `mapped_column(...)` / `Column(...)` call, return its kwargs."""
+        if isinstance(value, ast.Call):
+            func = value.func
+            func_name = None
+            if isinstance(func, ast.Name):
+                func_name = func.id
+            elif isinstance(func, ast.Attribute):
+                func_name = func.attr
+            if func_name in ("mapped_column", "Column"):
+                return list(value.keywords)
+        return []
+
+    def _column_call_positional_args(value: ast.AST) -> list[ast.AST]:
+        """For a column call, return its positional args (where FK can live)."""
+        if isinstance(value, ast.Call):
+            func = value.func
+            func_name = None
+            if isinstance(func, ast.Name):
+                func_name = func.id
+            elif isinstance(func, ast.Attribute):
+                func_name = func.attr
+            if func_name in ("mapped_column", "Column"):
+                return list(value.args)
+        return []
+
+    def _has_foreign_key(value: ast.AST) -> bool:
+        """True if a column call contains a ForeignKey(...) argument."""
+        # ForeignKey can appear as a positional arg or as kwarg `foreign_keys=...`
+        for arg in _column_call_positional_args(value):
+            if isinstance(arg, ast.Call):
+                fn = arg.func
+                name = None
+                if isinstance(fn, ast.Name):
+                    name = fn.id
+                elif isinstance(fn, ast.Attribute):
+                    name = fn.attr
+                if name == "ForeignKey":
+                    return True
+        return False
+
+    def _is_primary_key(value: ast.AST) -> bool:
+        """True if a column call has primary_key=True."""
+        for kw in _column_call_kwargs(value):
+            if (
+                kw.arg == "primary_key"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value is True
+            ):
+                return True
+        return False
 
     for py_file in src.rglob("*.py"):
         try:
@@ -2284,30 +2357,59 @@ def check_owner_id_column(repo_path: Path) -> list[Finding]:
                 continue
             if any(node.name.endswith(s) for s in exempt_suffixes):
                 continue
-            # Look for owner_id assignment in the class body
+
             has_owner_id = False
+            user_id_is_pk = False
+            user_id_has_fk = False
+
             for stmt in node.body:
-                targets: list = []
-                if isinstance(stmt, ast.Assign):
-                    targets = stmt.targets
-                elif isinstance(stmt, ast.AnnAssign):
+                if isinstance(stmt, ast.AnnAssign):
                     targets = [stmt.target]
+                    value = stmt.value
+                elif isinstance(stmt, ast.Assign):
+                    targets = stmt.targets
+                    value = stmt.value
+                else:
+                    continue
                 for t in targets:
-                    if isinstance(t, ast.Name) and t.id == "owner_id":
+                    if not isinstance(t, ast.Name):
+                        continue
+                    if t.id == "owner_id":
                         has_owner_id = True
-            if not has_owner_id:
-                # Also check for comment indicating internal table
-                findings.append(
-                    _finding(
-                        "API-006",
-                        "WARN",
-                        "structural_conformance",
-                        f"{rel}::{node.name}: SQLAlchemy model missing owner_id column.",
-                        "Add owner_id to enforce multi-tenant ownership. If this is a "
-                        "join/lookup/config table, suffix the class name (_lookup, "
-                        "_config, _enum) or document the exception in evaluator.yaml.",
-                    )
+                    elif t.id == "user_id" and value is not None:
+                        if _is_primary_key(value):
+                            user_id_is_pk = True
+                        if _has_foreign_key(value):
+                            user_id_has_fk = True
+
+            if has_owner_id:
+                continue
+            # Pattern 2: identity table — user_id is PK, OR class-name suffix
+            # indicates identity.
+            if user_id_is_pk or any(
+                node.name.endswith(s) for s in identity_class_suffixes
+            ):
+                continue
+            # Pattern 3: relationship table — user_id carries a ForeignKey.
+            if user_id_has_fk:
+                continue
+
+            findings.append(
+                _finding(
+                    "API-006",
+                    "WARN",
+                    "structural_conformance",
+                    f"{rel}::{node.name}: SQLAlchemy model is not "
+                    "authorization-scoped — no owner_id column, not an identity "
+                    "table (user_id primary key), and no user_id ForeignKey to "
+                    "an identity table.",
+                    "Add owner_id for ordinary tables; make user_id the primary "
+                    "key for identity tables; or add a ForeignKey on user_id for "
+                    "tables representing a relationship to a user. Suffix with "
+                    "_lookup/_config/_enum for internal tables, or document in "
+                    "evaluator.yaml.",
                 )
+            )
     return findings
 
 
