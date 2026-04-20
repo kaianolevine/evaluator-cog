@@ -2006,19 +2006,119 @@ def check_orm_usage(repo_path: Path, language: str = "python") -> list[Finding]:
 
 def check_v1_route_prefix(repo_path: Path, language: str = "python") -> list[Finding]:
     """API-004: /v1/ prefix required on public routes."""
-    CHECK_ID = "API-004"
     findings: list[Finding] = []
     src = repo_path / "src"
     if not src.is_dir():
         return findings
 
-    exempt_paths = ("/health", "/docs", "/openapi.json", "/metrics", "/redoc")
+    exempt_paths = (
+        "/health",
+        "/docs",
+        "/openapi.json",
+        "/metrics",
+        "/redoc",
+        "/version",
+    )
 
     if language == "python":
         import ast
 
         route_attrs = {"get", "post", "put", "delete", "patch", "head", "options"}
-        for py_file in src.rglob("*.py"):
+
+        def _const_str(node: ast.AST | None) -> str | None:
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return node.value
+            return None
+
+        def _router_var_name(node: ast.AST | None) -> str | None:
+            if isinstance(node, ast.Name):
+                return node.id
+            if isinstance(node, ast.Attribute):
+                return node.attr
+            return None
+
+        def _norm_path(segment: str) -> str:
+            seg = (segment or "").strip()
+            if not seg:
+                return ""
+            if not seg.startswith("/"):
+                seg = "/" + seg
+            if seg != "/":
+                seg = seg.rstrip("/")
+            return seg
+
+        def _join_paths(left: str, right: str) -> str:
+            left_norm = _norm_path(left)
+            right_norm = _norm_path(right)
+            if not left_norm:
+                return right_norm or "/"
+            if not right_norm:
+                return left_norm
+            if left_norm == "/":
+                return right_norm
+            if right_norm == "/":
+                return left_norm
+            return f"{left_norm}/{right_norm.lstrip('/')}"
+
+        py_files = list(src.rglob("*.py"))
+        local_prefixes: dict[str, str] = {}
+        include_prefixes: dict[str, str] = {}
+
+        # Pass 1: collect APIRouter local prefixes and include_router mount prefixes.
+        for py_file in py_files:
+            try:
+                text = py_file.read_text()
+                tree = ast.parse(text)
+            except Exception:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                    call = node.value
+                    if not (
+                        isinstance(call.func, ast.Name) and call.func.id == "APIRouter"
+                    ) and not (
+                        isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "APIRouter"
+                    ):
+                        continue
+                    prefix_val: str | None = None
+                    for kw in call.keywords:
+                        if kw.arg == "prefix":
+                            prefix_val = _const_str(kw.value)
+                            break
+                    if not prefix_val:
+                        continue
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            local_prefixes[target.id] = prefix_val
+
+                if isinstance(node, ast.Call):
+                    if not (
+                        isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "include_router"
+                    ):
+                        continue
+                    if not node.args:
+                        continue
+                    router_name = _router_var_name(node.args[0])
+                    if not router_name:
+                        continue
+                    include_prefix: str | None = None
+                    for kw in node.keywords:
+                        if kw.arg == "prefix":
+                            include_prefix = _const_str(kw.value)
+                            break
+                    if not include_prefix:
+                        continue
+                    existing = include_prefixes.get(router_name)
+                    # Prefer a v1-bearing mount if multiple include_router calls exist.
+                    if existing is None or (
+                        "/v1" in include_prefix and "/v1" not in existing
+                    ):
+                        include_prefixes[router_name] = include_prefix
+
+        # Pass 2: evaluate effective route path from include + local + decorator path.
+        for py_file in py_files:
             try:
                 text = py_file.read_text()
                 tree = ast.parse(text)
@@ -2038,26 +2138,29 @@ def check_v1_route_prefix(repo_path: Path, language: str = "python") -> list[Fin
                     if not dec.args:
                         continue
                     path_arg = dec.args[0]
-                    if not isinstance(path_arg, ast.Constant) or not isinstance(
-                        path_arg.value, str
-                    ):
+                    route = _const_str(path_arg)
+                    if route is None:
                         continue
-                    route = path_arg.value
-                    if any(route.startswith(p) for p in exempt_paths):
+                    router_var = _router_var_name(dec.func.value)
+                    include_prefix = include_prefixes.get(router_var or "", "")
+                    local_prefix = local_prefixes.get(router_var or "", "")
+                    effective_route = _join_paths(
+                        _join_paths(include_prefix, local_prefix), route
+                    )
+
+                    if any(effective_route.startswith(p) for p in exempt_paths):
                         continue
-                    if not route.startswith("/v1/"):
+                    if not effective_route.startswith("/v1/"):
                         findings.append(
                             _finding(
                                 "API-004",
                                 "ERROR",
                                 "structural_conformance",
-                                f"{rel}::{node.name}: route {route!r} missing /v1/ prefix.",
+                                f"{rel}::{node.name}: effective route {effective_route!r} missing /v1/ prefix.",
                                 "Mount routes under /v1/ to support versioning.",
                             )
                         )
     else:
-        import re
-
         route_re = re.compile(
             r"""(?:app|router)\.(?:get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]"""
         )
