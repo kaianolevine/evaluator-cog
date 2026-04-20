@@ -555,3 +555,78 @@ def test_cd_015_still_catches_work_pool(tmp_path: Path) -> None:
         f for f in check_prefect_serve_pattern(tmp_path) if f.get("severity") == "ERROR"
     ]
     assert len(errors) >= 1
+
+
+# --- API-008 ------------------------------------------------------------------
+
+
+def test_api_008_accepts_intentionally_public_in_description(tmp_path: Path) -> None:
+    """API-008: routes with 'intentionally public' in description= are exempt."""
+    from evaluator_cog.engine.deterministic import check_unauthenticated_routes
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.py").write_text(
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "\n"
+        "@app.get('/version', description='Reports version. Intentionally public.')\n"
+        "async def version() -> dict:\n"
+        "    return {'version': '1'}\n"
+    )
+    assert check_unauthenticated_routes(tmp_path, language="python") == []
+
+
+def test_api_008_accepts_intentionally_public_in_docstring(tmp_path: Path) -> None:
+    """API-008: routes with 'intentionally public' in docstring are exempt."""
+    from evaluator_cog.engine.deterministic import check_unauthenticated_routes
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.py").write_text(
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "\n"
+        "@app.get('/')\n"
+        "async def root() -> dict:\n"
+        "    '''Redirect. Intentionally public.'''\n"
+        "    return {}\n"
+    )
+    assert check_unauthenticated_routes(tmp_path, language="python") == []
+
+
+def test_api_008_still_flags_unmarked_public_route(tmp_path: Path) -> None:
+    """API-008: routes with no auth and no intent marker still flagged."""
+    from evaluator_cog.engine.deterministic import check_unauthenticated_routes
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.py").write_text(
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "\n"
+        "@app.get('/secret')\n"
+        "async def secret() -> dict:\n"
+        "    return {'data': 'leak'}\n"
+    )
+    findings = check_unauthenticated_routes(tmp_path, language="python")
+    assert len(findings) == 1
+
+
+def test_api_008_accepts_depends(tmp_path: Path) -> None:
+    """API-008: routes with Depends() unchanged."""
+    from evaluator_cog.engine.deterministic import check_unauthenticated_routes
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.py").write_text(
+        "from fastapi import FastAPI, Depends\n"
+        "app = FastAPI()\n"
+        "\n"
+        "def verify(): pass\n"
+        "\n"
+        "@app.get('/protected')\n"
+        "async def protected(user=Depends(verify)) -> dict:\n"
+        "    return {}\n"
+    )
+    assert check_unauthenticated_routes(tmp_path, language="python") == []

@@ -2466,11 +2466,19 @@ def check_unauthenticated_routes(
 ) -> list[Finding]:
     """API-008: Unauthenticated routes must be intentional.
 
-    Deterministic part: flag FastAPI routes with no Depends(...) in the
-    function signature. Whether the lack-of-auth is intentional is the
-    LLM's job.
+    A FastAPI route clears the check if any of the following hold:
+
+      1. The function signature has a Depends(...) default (authed).
+      2. The route path is on the built-in exempt list (/health,
+         /metrics, /docs, /openapi.json, /redoc).
+      3. The decorator's description= or summary= kwarg contains the
+         phrase "intentionally public" (case-insensitive) — the route
+         explicitly documents its unauthenticated intent.
+      4. The handler's docstring contains "intentionally public".
+
+    Routes that lack auth and none of the above intent markers are
+    flagged.
     """
-    CHECK_ID = "API-008"
     findings: list[Finding] = []
     if language != "python":
         return findings
@@ -2482,6 +2490,31 @@ def check_unauthenticated_routes(
 
     route_attrs = {"get", "post", "put", "delete", "patch"}
     exempt_paths = ("/health", "/metrics", "/docs", "/openapi.json", "/redoc")
+    intent_marker = "intentionally public"
+
+    def _kwarg_contains(dec: ast.Call, kwarg_name: str, needle: str) -> bool:
+        """Return True if decorator's kwarg (string or concatenated) contains needle."""
+        for kw in dec.keywords:
+            if kw.arg != kwarg_name:
+                continue
+            # Simple string constant
+            if (
+                isinstance(kw.value, ast.Constant)
+                and isinstance(kw.value.value, str)
+                and needle in kw.value.value.lower()
+            ):
+                return True
+            # Implicit-string-concatenation or parenthesized multi-line string:
+            # FastAPI often has description=( "..." "..." ) which AST represents
+            # as a single Constant in Python 3.12+, but may be a BinOp or
+            # JoinedStr in other forms. Fall back to unparsing the node.
+            try:
+                unparsed = ast.unparse(kw.value)
+                if needle in unparsed.lower():
+                    return True
+            except Exception:
+                pass
+        return False
 
     for py_file in src.rglob("*.py"):
         try:
@@ -2495,6 +2528,7 @@ def check_unauthenticated_routes(
                 continue
             # Is this a route handler?
             route_path: str | None = None
+            route_dec: ast.Call | None = None
             for dec in node.decorator_list:
                 if not isinstance(dec, ast.Call):
                     continue
@@ -2508,12 +2542,13 @@ def check_unauthenticated_routes(
                     and isinstance(dec.args[0].value, str)
                 ):
                     route_path = dec.args[0].value
+                    route_dec = dec
                     break
-            if route_path is None:
+            if route_path is None or route_dec is None:
                 continue
             if any(route_path.startswith(p) for p in exempt_paths):
                 continue
-            # Any Depends(...) default in args?
+            # Depends(...) default?
             has_depends = False
             for arg_default in node.args.defaults + node.args.kw_defaults:
                 if arg_default is None:
@@ -2525,17 +2560,29 @@ def check_unauthenticated_routes(
                 ):
                     has_depends = True
                     break
-            if not has_depends:
-                findings.append(
-                    _finding(
-                        "API-008",
-                        "ERROR",
-                        "structural_conformance",
-                        f"{rel}::{node.name}: route {route_path!r} has no Depends(...) auth.",
-                        "Add Depends(verify_token) for protected routes, or document the "
-                        "intentional public access in the route's description.",
-                    )
+            if has_depends:
+                continue
+            # "intentionally public" marker in decorator description/summary?
+            if _kwarg_contains(
+                route_dec, "description", intent_marker
+            ) or _kwarg_contains(route_dec, "summary", intent_marker):
+                continue
+            # "intentionally public" marker in function docstring?
+            doc = ast.get_docstring(node) or ""
+            if intent_marker in doc.lower():
+                continue
+            findings.append(
+                _finding(
+                    "API-008",
+                    "ERROR",
+                    "structural_conformance",
+                    f"{rel}::{node.name}: route {route_path!r} has no Depends(...) auth.",
+                    "Add Depends(verify_token) for protected routes, or document the "
+                    "intentional public access in the route's decorator "
+                    "description=/summary= or docstring with the phrase "
+                    "'intentionally public'.",
                 )
+            )
     return findings
 
 
