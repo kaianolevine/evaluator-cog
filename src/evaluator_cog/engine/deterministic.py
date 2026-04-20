@@ -2895,10 +2895,17 @@ def check_logger_misuse(repo_path: Path) -> list[Finding]:
 
 
 def check_three_layer_observability(
-    repo_path: Path, cog_subtype: str | None = None
+    repo_path: Path,
+    cog_subtype: str | None = None,
+    language: str = "python",
 ) -> list[Finding]:
-    """CD-010: Three-layer observability — Healthchecks + logger + Sentry."""
-    CHECK_ID = "CD-010"
+    """CD-010: Three-layer observability — Healthchecks + logger + Sentry.
+
+    Language-aware: Python services must use sentry_sdk + common-python-utils;
+    TypeScript services must use @sentry/node (or @sentry/react/@sentry/astro)
+    + common-typescript-utils. The stack is equivalent; only the package
+    names differ.
+    """
     findings: list[Finding] = []
     src = repo_path / "src"
     env_example = repo_path / ".env.example"
@@ -2906,15 +2913,21 @@ def check_three_layer_observability(
     env_text = env_example.read_text() if env_example.exists() else ""
     src_text = ""
     if src.is_dir():
-        for py_file in src.rglob("*.py"):
-            try:
-                src_text += "\n" + py_file.read_text()
-            except Exception:
-                continue
+        exts = ("*.py",) if language == "python" else ("*.ts", "*.tsx", "*.astro")
+        for ext in exts:
+            for f in src.rglob(ext):
+                try:
+                    src_text += "\n" + f.read_text(errors="replace")
+                except Exception:
+                    continue
 
-    # Layer 1: Healthchecks — only required for worker-style services
-    # (pipeline-cog, trigger-cog). HTTP services (api-service) rely on
-    # Railway restart.
+    package_json_text = ""
+    package_json = repo_path / "package.json"
+    if package_json.exists():
+        with suppress(Exception):
+            package_json_text = package_json.read_text()
+
+    # Layer 1: Healthchecks — only required for worker-style services.
     if cog_subtype in ("pipeline", "trigger") and (
         "HEALTHCHECKS_URL" not in env_text or "healthchecks.io" not in src_text.lower()
     ):
@@ -2929,28 +2942,61 @@ def check_three_layer_observability(
             )
         )
 
-    # Layer 2: structured logging via shared library
-    if "common_python_utils" not in src_text and "mini_app_polis" not in src_text:
+    # Layer 2: structured logging via shared library.
+    if language == "python":
+        layer2_present = (
+            "common_python_utils" in src_text or "mini_app_polis" in src_text
+        )
+        layer2_hint = (
+            "Import the shared logger from common_python_utils "
+            "(import package name: mini_app_polis) and use it throughout."
+        )
+    else:
+        layer2_present = "common-typescript-utils" in src_text or (
+            "common-typescript-utils" in package_json_text
+        )
+        layer2_hint = (
+            "Import the shared logger from common-typescript-utils "
+            "(createLogger) and use it throughout."
+        )
+    if not layer2_present:
         findings.append(
             _finding(
                 "CD-010",
                 "ERROR",
                 "structural_conformance",
-                "Layer 2 missing: no common-python-utils logger usage.",
-                "Import the shared logger from common_python_utils and use it throughout.",
+                "Layer 2 missing: no shared-library logger usage.",
+                layer2_hint,
             )
         )
 
-    # Layer 3: Sentry
-    if "sentry_sdk" not in src_text or "SENTRY_DSN" not in env_text:
+    # Layer 3: Sentry.
+    if language == "python":
+        layer3_present = "sentry_sdk" in src_text and (
+            "SENTRY_DSN" in env_text or "SENTRY_DSN" in src_text
+        )
+        layer3_hint = (
+            "Initialise sentry_sdk at entry point and add SENTRY_DSN "
+            "(or a service-specific variant) to .env.example."
+        )
+    else:
+        layer3_present = (
+            "@sentry/node" in package_json_text
+            or "@sentry/react" in package_json_text
+            or "@sentry/astro" in package_json_text
+        ) and ("SENTRY_DSN" in env_text or "SENTRY_DSN" in src_text)
+        layer3_hint = (
+            "Install @sentry/node (api) or @sentry/react/@sentry/astro (web), "
+            "initialise it at entry point, and add SENTRY_DSN to .env.example."
+        )
+    if not layer3_present:
         findings.append(
             _finding(
                 "CD-010",
                 "ERROR",
                 "structural_conformance",
-                "Layer 3 missing: no sentry_sdk.init() or SENTRY_DSN in .env.example.",
-                "Initialise sentry_sdk at entry point and add SENTRY_DSN (or a "
-                "service-specific variant) to .env.example.",
+                "Layer 3 missing: Sentry integration not detected.",
+                layer3_hint,
             )
         )
     return findings
@@ -5630,7 +5676,9 @@ def run_all_checks(
         )
 
         def _cd_010_check(p: Path) -> list[Finding]:
-            return check_three_layer_observability(p, cog_subtype=_cog_st_010)
+            return check_three_layer_observability(
+                p, cog_subtype=_cog_st_010, language=language
+            )
 
         _run(_cd_010_check, "CD-010")
 

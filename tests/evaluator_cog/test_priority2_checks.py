@@ -630,3 +630,66 @@ def test_api_008_accepts_depends(tmp_path: Path) -> None:
         "    return {}\n"
     )
     assert check_unauthenticated_routes(tmp_path, language="python") == []
+
+
+# --- CD-010 --------------------------------------------------------------------
+
+
+def test_cd_010_typescript_accepts_sentry_node(tmp_path: Path) -> None:
+    """CD-010: TS service with @sentry/node + common-typescript-utils passes."""
+    from evaluator_cog.engine.deterministic import check_three_layer_observability
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.ts").write_text(
+        'import * as Sentry from "@sentry/node";\n'
+        'import { createLogger } from "common-typescript-utils";\n'
+        "Sentry.init({ dsn: process.env.SENTRY_DSN });\n"
+        'const logger = createLogger("app");\n'
+    )
+    (tmp_path / ".env.example").write_text("SENTRY_DSN=\n")
+    (tmp_path / "package.json").write_text(
+        '{"dependencies": {"@sentry/node": "^10.0.0", "common-typescript-utils": "^1.0.0"}}'
+    )
+    findings = check_three_layer_observability(
+        tmp_path, cog_subtype=None, language="typescript"
+    )
+    layer_errors = [f for f in findings if "Layer" in f["finding"]]
+    assert layer_errors == []
+
+
+def test_cd_010_typescript_flags_missing_sentry(tmp_path: Path) -> None:
+    """CD-010: TS service without @sentry/* is flagged at Layer 3."""
+    from evaluator_cog.engine.deterministic import check_three_layer_observability
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.ts").write_text(
+        'import { createLogger } from "common-typescript-utils";\n'
+    )
+    (tmp_path / ".env.example").write_text("")
+    (tmp_path / "package.json").write_text(
+        '{"dependencies": {"common-typescript-utils": "^1.0.0"}}'
+    )
+    findings = check_three_layer_observability(
+        tmp_path, cog_subtype=None, language="typescript"
+    )
+    assert any("Layer 3" in f["finding"] for f in findings)
+
+
+def test_cd_010_python_unchanged(tmp_path: Path) -> None:
+    """CD-010: Python path still works as before."""
+    from evaluator_cog.engine.deterministic import check_three_layer_observability
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.py").write_text(
+        "import sentry_sdk\n"
+        "from mini_app_polis.logger import get_logger\n"
+        "sentry_sdk.init()\n"
+    )
+    (tmp_path / ".env.example").write_text("SENTRY_DSN=\n")
+    findings = check_three_layer_observability(
+        tmp_path, cog_subtype=None, language="python"
+    )
+    assert findings == []
