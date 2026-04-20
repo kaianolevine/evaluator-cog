@@ -1,3 +1,10 @@
+## [3.11.6](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.5...v3.11.6) (2026-04-20)
+
+
+### Bug Fixes
+
+* api evaluation ([aa75439](https://github.com/mini-app-polis/evaluator-cog/commit/aa754391bd153f2a28949af45bbc837fa2e534c2))
+
 ## [3.11.5](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.4...v3.11.5) (2026-04-20)
 
 
