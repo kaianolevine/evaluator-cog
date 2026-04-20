@@ -1,3 +1,10 @@
+## [3.11.4](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.3...v3.11.4) (2026-04-20)
+
+
+### Bug Fixes
+
+* false positives for API-004 ([c36f1c9](https://github.com/mini-app-polis/evaluator-cog/commit/c36f1c95866eecd721ed65b9f3fa93916391aa1e))
+
 ## [3.11.3](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.2...v3.11.3) (2026-04-19)
 
 
