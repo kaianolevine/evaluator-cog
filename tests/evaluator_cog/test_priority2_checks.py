@@ -14,6 +14,7 @@ from evaluator_cog.engine.deterministic import (
     check_inputs_not_deleted,
     check_no_retired_trigger_patterns,
     check_response_shape_parity,
+    check_respx_for_http_mocking,
     check_shared_library_used,
 )
 
@@ -204,6 +205,16 @@ def test_cd012_skips_tests_tree_under_src(tmp_path: Path) -> None:
     assert check_clerk_m2m_auth(tmp_path, language="python") == []
 
 
+def test_cd012_skips_literal_only_x_internal_api_key_pattern(tmp_path: Path) -> None:
+    """CD-012: substring only inside string literals (fixtures / self-scan) is ignored."""
+    _write(
+        tmp_path,
+        "src/patterns.py",
+        'PATTERN = "X-Internal-API-Key"\n',
+    )
+    assert check_clerk_m2m_auth(tmp_path, language="python") == []
+
+
 def test_cd012_passes_when_jwt_pattern_present(tmp_path: Path) -> None:
     _write(
         tmp_path,
@@ -305,6 +316,31 @@ def test_pipe005_skips_under_src_tests(tmp_path: Path) -> None:
         "import os\ndef x(input_path):\n    os.remove(input_path)\n",
     )
     assert check_inputs_not_deleted(tmp_path) == []
+
+
+def test_pipe005_skips_literal_only_files_delete_pattern(tmp_path: Path) -> None:
+    """PIPE-005: both delete substrings only inside literals (fixture / self-scan)."""
+    _write(
+        tmp_path,
+        "src/fixtures.py",
+        'NOTE = ".files().delete( in text or files().delete( in text"\n',
+    )
+    assert check_inputs_not_deleted(tmp_path) == []
+
+
+# --- TEST-007 -----------------------------------------------------------------
+
+
+def test_test007_skips_http_tokens_only_in_string_literals(tmp_path: Path) -> None:
+    """TEST-007: httpx/requests call text embedded only in literals is ignored."""
+    _write(tmp_path, "pyproject.toml", "[project]\nname=x\ndependencies=[]\n# respx\n")
+    _write(
+        tmp_path,
+        "tests/test_fixture.py",
+        "EXAMPLE = \"httpx.get('https://example.com')\"\n",
+    )
+    findings = check_respx_for_http_mocking(tmp_path)
+    assert not any(f.get("rule_id") == "TEST-007" for f in findings)
 
 
 # --- PIPE-008 (narrowed) -----------------------------------------------------
@@ -693,6 +729,45 @@ def test_cd_010_python_unchanged(tmp_path: Path) -> None:
         tmp_path, cog_subtype=None, language="python"
     )
     assert findings == []
+
+
+def test_cd010_layer1_passes_per_service_env_without_hostname(tmp_path: Path) -> None:
+    """CD-010 Layer 1: per-service HEALTHCHECKS_URL_* + code ref without hostname."""
+    from evaluator_cog.engine.deterministic import check_three_layer_observability
+
+    (tmp_path / ".env.example").write_text(
+        "HEALTHCHECKS_URL_WATCHER=\nSENTRY_DSN=\n",
+        encoding="utf-8",
+    )
+    _write(
+        tmp_path,
+        "src/worker.py",
+        "import os\nimport sentry_sdk\nfrom mini_app_polis.logger import get_logger\n"
+        '_url = os.getenv("HEALTHCHECKS_URL_WATCHER")\n'
+        "sentry_sdk.init()\n",
+    )
+    findings = check_three_layer_observability(
+        tmp_path, cog_subtype="pipeline", language="python"
+    )
+    assert not any("Layer 1" in f["finding"] for f in findings)
+
+
+def test_cd010_layer1_fails_pipeline_without_healthchecks_signals(
+    tmp_path: Path,
+) -> None:
+    """CD-010 Layer 1: pipeline without env key or source ref still errors."""
+    from evaluator_cog.engine.deterministic import check_three_layer_observability
+
+    (tmp_path / ".env.example").write_text("SENTRY_DSN=\n", encoding="utf-8")
+    _write(
+        tmp_path,
+        "src/main.py",
+        "import sentry_sdk\nfrom mini_app_polis.logger import get_logger\nsentry_sdk.init()\n",
+    )
+    findings = check_three_layer_observability(
+        tmp_path, cog_subtype="pipeline", language="python"
+    )
+    assert any("Layer 1" in f["finding"] for f in findings)
 
 
 # --- XSTACK-002 (TS exclusions) ------------------------------------------------

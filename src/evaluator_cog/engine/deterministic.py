@@ -13,6 +13,7 @@ Checks are grouped by what they inspect:
 
 from __future__ import annotations
 
+import ast
 import re
 from contextlib import suppress
 from dataclasses import dataclass
@@ -74,6 +75,57 @@ def _deduplicate_same_repo_findings(findings: list[Finding]) -> list[Finding]:
             and _SUPERSEDED_BY[str(f.get("rule_id", ""))] in fired_rule_ids
         )
     ]
+
+
+def _ast_constant_is_dict_key(const: ast.Constant, tree: ast.AST) -> bool:
+    """True if this Constant is the key expression of a dict display."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict) and const in node.keys:
+            return True
+    return False
+
+
+def _is_inside_string_literal(source: str, match_substring: str) -> bool:
+    """Return True if every occurrence of match_substring in source sits
+    inside a Python string literal.
+
+    Used by checkers that scan Python files with substring containment
+    (e.g. ``if "X-Internal-API-Key" in text``). When the scanned file is
+    the checker itself — or a test fixture containing source snippets
+    built as string literals — every match is a self-scan artifact, not
+    a real occurrence.
+
+    Implementation: parse ``source`` with ast.parse(). If parsing fails,
+    return False (conservative — let the caller flag). Walk the AST for
+    ast.Constant nodes whose .value is a str containing match_substring.
+    Dict literal keys are excluded — ``{{"X-Internal-API-Key": "x"}}`` is
+    real usage, not a quoted pattern string.
+
+    Count how many times match_substring appears in total (plain
+    source.count(match_substring)) vs. how many times it appears inside
+    counted string-literal Constant nodes. If every occurrence is inside
+    a string literal, return True; otherwise return False.
+
+    Caveat: this handles the common case of bare string literals. It
+    does NOT try to reason about f-strings, concatenated literals, or
+    triple-quoted docstrings beyond what ast represents — ast.Constant
+    already covers those correctly for our purposes.
+    """
+    if match_substring not in source:
+        return False
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    literal_hits = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if _ast_constant_is_dict_key(node, tree):
+            continue
+        literal_hits += node.value.count(match_substring)
+    total_hits = source.count(match_substring)
+    return literal_hits >= total_hits
 
 
 # -- File presence checks -----------------------------------------------------
@@ -1852,7 +1904,9 @@ def check_clerk_m2m_auth(repo_path: Path, *, language: str = "python") -> list[F
             text = py.read_text()
         except OSError:
             continue
-        if "X-Internal-API-Key" in text:
+        if "X-Internal-API-Key" in text and not _is_inside_string_literal(
+            text, "X-Internal-API-Key"
+        ):
             findings.append(
                 _finding(
                     "CD-012",
@@ -1940,7 +1994,11 @@ def check_inputs_not_deleted(repo_path: Path) -> list[Finding]:
             text = path.read_text()
         except OSError:
             continue
-        if ".files().delete(" in text or "files().delete(" in text:
+        has_delete = ".files().delete(" in text or "files().delete(" in text
+        if has_delete and not (
+            _is_inside_string_literal(text, ".files().delete(")
+            and _is_inside_string_literal(text, "files().delete(")
+        ):
             findings.append(
                 _finding(
                     "PIPE-005",
@@ -2937,19 +2995,25 @@ def check_three_layer_observability(
             package_json_text = package_json.read_text()
 
     # Layer 1: Healthchecks — only required for worker-style services.
-    if cog_subtype in ("pipeline", "trigger") and (
-        "HEALTHCHECKS_URL" not in env_text or "healthchecks.io" not in src_text.lower()
-    ):
-        findings.append(
-            _finding(
-                "CD-010",
-                "ERROR",
-                "structural_conformance",
-                "Layer 1 missing: no HEALTHCHECKS_URL env var or healthchecks.io ping in source.",
-                "Add HEALTHCHECKS_URL to .env.example and ping healthchecks.io from "
-                "the main loop.",
-            )
+    if cog_subtype in ("pipeline", "trigger"):
+        env_has_healthchecks = (
+            "HEALTHCHECKS_URL" in env_text or "HEALTHCHECKS_URL_" in env_text
         )
+        src_has_ping_signal = "healthchecks.io" in src_text.lower() or (
+            "HEALTHCHECKS_URL" in src_text
+        )
+        if not (env_has_healthchecks and src_has_ping_signal):
+            findings.append(
+                _finding(
+                    "CD-010",
+                    "ERROR",
+                    "structural_conformance",
+                    "Layer 1 missing: no HEALTHCHECKS_URL env var or healthchecks.io ping in source.",
+                    "Add HEALTHCHECKS_URL (or a per-service HEALTHCHECKS_URL_<NAME>) "
+                    "to .env.example and reference it from the main loop to ping "
+                    "healthchecks.io.",
+                )
+            )
 
     # Layer 2: structured logging via shared library.
     if language == "python":
@@ -4619,17 +4683,23 @@ def check_respx_for_http_mocking(repo_path: Path) -> list[Finding]:
     if not tests_dir.is_dir():
         return findings
     for test_file in tests_dir.rglob("test_*.py"):
-        text = test_file.read_text()
-        has_raw_http = any(
-            token in text
-            for token in (
-                "httpx.get(",
-                "httpx.post(",
-                "requests.get(",
-                "requests.post(",
-            )
+        try:
+            text = test_file.read_text()
+        except OSError:
+            continue
+
+        http_tokens = (
+            "httpx.get(",
+            "httpx.post(",
+            "requests.get(",
+            "requests.post(",
         )
-        if has_raw_http and "respx.mock" not in text:
+        real_http_tokens = [
+            tok
+            for tok in http_tokens
+            if tok in text and not _is_inside_string_literal(text, tok)
+        ]
+        if real_http_tokens and "respx.mock" not in text:
             findings.append(
                 _finding(
                     "TEST-007",
