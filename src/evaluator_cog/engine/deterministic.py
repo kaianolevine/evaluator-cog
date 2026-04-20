@@ -1704,7 +1704,16 @@ def check_response_shape_parity(
                 break
     else:
         for ts in list(src.rglob("*.ts")) + list(src.rglob("*.tsx")):
-            if "tests/" in str(ts).replace("\\", "/"):
+            ts_path_str = str(ts).replace("\\", "/")
+            # Skip test code regardless of layout:
+            #   - any file under a tests/ or test/ directory
+            #   - any *.test.ts or *.test.tsx file (Vitest/Jest convention)
+            if (
+                "/tests/" in ts_path_str
+                or "/test/" in ts_path_str
+                or ts.name.endswith(".test.ts")
+                or ts.name.endswith(".test.tsx")
+            ):
                 continue
             try:
                 text = ts.read_text()

@@ -693,3 +693,37 @@ def test_cd_010_python_unchanged(tmp_path: Path) -> None:
         tmp_path, cog_subtype=None, language="python"
     )
     assert findings == []
+
+
+# --- XSTACK-002 (TS exclusions) ------------------------------------------------
+
+
+def test_xstack_002_skips_src_test_directory(tmp_path: Path) -> None:
+    """XSTACK-002: files under src/test/ are not flagged."""
+    src = tmp_path / "src" / "test"
+    src.mkdir(parents=True)
+    (src / "mocks.ts").write_text(
+        "export function mockHandler(c) {\n  return c.json({ ok: true });\n}\n"
+    )
+    assert check_response_shape_parity(tmp_path, language="typescript") == []
+
+
+def test_xstack_002_skips_dot_test_files(tmp_path: Path) -> None:
+    """XSTACK-002: *.test.ts files are not flagged."""
+    src = tmp_path / "src" / "routes"
+    src.mkdir(parents=True)
+    (src / "songs.test.ts").write_text(
+        'test("x", () => {\n  c.json({ data: [] });\n});\n'
+    )
+    assert check_response_shape_parity(tmp_path, language="typescript") == []
+
+
+def test_xstack_002_still_flags_production_handler(tmp_path: Path) -> None:
+    """XSTACK-002: real production handlers using raw c.json still flagged."""
+    src = tmp_path / "src" / "routes"
+    src.mkdir(parents=True)
+    (src / "songs.ts").write_text(
+        "export function handler(c) {\n  return c.json({ ok: true });\n}\n"
+    )
+    findings = check_response_shape_parity(tmp_path, language="typescript")
+    assert len(findings) == 1
