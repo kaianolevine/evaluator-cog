@@ -437,3 +437,71 @@ def test_test_011_still_flags_unverified_mock(tmp_path: Path) -> None:
     )
     findings = check_mock_assertions(tmp_path)
     assert len(findings) == 1
+
+
+# --- PIPE-006 -----------------------------------------------------------------
+
+
+def test_pipe_006_accepts_repo_local_wrapper(tmp_path: Path) -> None:
+    """PIPE-006: flows calling a repo-local logger wrapper are accepted."""
+    from evaluator_cog.engine.deterministic import check_prefect_run_logger
+
+    src = tmp_path / "src" / "mycog"
+    src.mkdir(parents=True)
+    (src / "helpers.py").write_text(
+        "import logging\n"
+        "from prefect import get_run_logger\n"
+        "\n"
+        "_log = logging.getLogger(__name__)\n"
+        "\n"
+        "def get_prefect_logger():\n"
+        "    try:\n"
+        "        return get_run_logger()\n"
+        "    except Exception:\n"
+        "        return _log\n"
+    )
+    (src / "flow_mod.py").write_text(
+        "from prefect import flow\n"
+        "from .helpers import get_prefect_logger\n"
+        "\n"
+        "@flow\n"
+        "def my_flow():\n"
+        "    logger = get_prefect_logger()\n"
+        "    logger.info('hello')\n"
+    )
+    assert check_prefect_run_logger(tmp_path) == []
+
+
+def test_pipe_006_flags_flow_with_no_logger(tmp_path: Path) -> None:
+    """PIPE-006: flows with no logger acquisition still flagged."""
+    from evaluator_cog.engine.deterministic import check_prefect_run_logger
+
+    src = tmp_path / "src" / "mycog"
+    src.mkdir(parents=True)
+    (src / "flow_mod.py").write_text(
+        "from prefect import flow\n\n@flow\ndef my_flow():\n    print('hello')\n"
+    )
+    assert len(check_prefect_run_logger(tmp_path)) == 1
+
+
+def test_pipe_006_does_not_accept_logger_function_without_run_logger(
+    tmp_path: Path,
+) -> None:
+    """PIPE-006: get_logger without get_run_logger is not a wrapper."""
+    from evaluator_cog.engine.deterministic import check_prefect_run_logger
+
+    src = tmp_path / "src" / "mycog"
+    src.mkdir(parents=True)
+    (src / "helpers.py").write_text(
+        "import logging\n\ndef get_logger():\n    return logging.getLogger(__name__)\n"
+    )
+    (src / "flow_mod.py").write_text(
+        "from prefect import flow\n"
+        "from .helpers import get_logger\n"
+        "\n"
+        "@flow\n"
+        "def my_flow():\n"
+        "    logger = get_logger()\n"
+        "    logger.info('hello')\n"
+    )
+    assert len(check_prefect_run_logger(tmp_path)) == 1

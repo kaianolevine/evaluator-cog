@@ -3432,8 +3432,18 @@ def check_shared_resource_concurrency(repo_path: Path) -> list[Finding]:
 
 
 def check_prefect_run_logger(repo_path: Path) -> list[Finding]:
-    """PIPE-006: Prefect flows use get_run_logger() with fallback."""
-    CHECK_ID = "PIPE-006"
+    """PIPE-006: Prefect flows use get_run_logger() with fallback.
+
+    Accepts two equivalent patterns:
+
+      1. Direct: the flow body calls get_run_logger() itself.
+      2. Wrapper: the flow body calls a function whose name contains
+         'logger' and whose body (defined in this repo) calls
+         get_run_logger().
+
+    The wrapper pattern is common — it centralizes the
+    fallback-to-stdlib behavior in one place.
+    """
     import ast
 
     findings: list[Finding] = []
@@ -3441,6 +3451,29 @@ def check_prefect_run_logger(repo_path: Path) -> list[Finding]:
     if not src.is_dir():
         return findings
 
+    # First pass: collect repo-local logger-wrapper functions —
+    # functions whose name contains "logger" and whose body calls
+    # get_run_logger.
+    wrapper_names: set[str] = set()
+    for py_file in src.rglob("*.py"):
+        try:
+            text = py_file.read_text()
+            tree = ast.parse(text)
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if "logger" not in node.name.lower():
+                continue
+            try:
+                body_src = ast.unparse(node)
+            except Exception:
+                continue
+            if "get_run_logger" in body_src:
+                wrapper_names.add(node.name)
+
+    # Second pass: check each @flow-decorated function.
     for py_file in src.rglob("*.py"):
         try:
             text = py_file.read_text()
@@ -3463,18 +3496,27 @@ def check_prefect_run_logger(repo_path: Path) -> list[Finding]:
             )
             if not is_flow:
                 continue
-            body_src = ast.unparse(node)
-            if "get_run_logger" not in body_src:
-                findings.append(
-                    _finding(
-                        "PIPE-006",
-                        "WARN",
-                        "pipeline_consistency",
-                        f"{rel}::{node.name}: flow does not call get_run_logger().",
-                        "Use get_run_logger() inside flows for Prefect-integrated logging; "
-                        "fall back to stdlib logging outside Prefect context.",
-                    )
+            try:
+                body_src = ast.unparse(node)
+            except Exception:
+                continue
+            if "get_run_logger" in body_src:
+                continue
+            if any(name in body_src for name in wrapper_names):
+                continue
+            findings.append(
+                _finding(
+                    "PIPE-006",
+                    "WARN",
+                    "pipeline_consistency",
+                    f"{rel}::{node.name}: flow does not call get_run_logger() "
+                    f"(directly or via a logger-wrapper defined in this repo).",
+                    "Use get_run_logger() inside flows for Prefect-integrated logging; "
+                    "fall back to stdlib logging outside Prefect context. A wrapper "
+                    "whose name contains 'logger' and which internally calls "
+                    "get_run_logger() is also accepted.",
                 )
+            )
     return findings
 
 
