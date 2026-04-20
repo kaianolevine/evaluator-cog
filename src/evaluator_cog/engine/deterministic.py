@@ -4102,8 +4102,17 @@ def check_hardcoded_time_values(
         ]
         exts = ("*.ts", "*.tsx")
 
+    # UI contexts where setTimeout/setInterval values are visual design
+    # choices (animation delays, toast timing, progress-bar completion
+    # effects), not production retry/timeout values.
+    _ui_path_markers = ("/pages/", "/components/", "/layouts/", "/views/")
+
     for ext in exts:
         for f in src.rglob(ext):
+            if language != "python":
+                path_str = str(f).replace("\\", "/")
+                if f.suffix == ".tsx" or any(m in path_str for m in _ui_path_markers):
+                    continue
             try:
                 text = f.read_text()
             except Exception:

@@ -727,3 +727,43 @@ def test_xstack_002_still_flags_production_handler(tmp_path: Path) -> None:
     )
     findings = check_response_shape_parity(tmp_path, language="typescript")
     assert len(findings) == 1
+
+
+# --- TEST-013 -----------------------------------------------------------------
+
+
+def test_test_013_skips_react_tsx(tmp_path: Path) -> None:
+    """TEST-013: setTimeout in .tsx files is not flagged (UI delays)."""
+    from evaluator_cog.engine.deterministic import check_hardcoded_time_values
+
+    src = tmp_path / "src" / "pages"
+    src.mkdir(parents=True)
+    (src / "SongsPage.tsx").write_text(
+        "export default function SongsPage() {\n"
+        "  await new Promise((r) => setTimeout(r, 400));\n"
+        "}\n"
+    )
+    assert check_hardcoded_time_values(tmp_path, language="typescript") == []
+
+
+def test_test_013_skips_pages_directory(tmp_path: Path) -> None:
+    """TEST-013: setTimeout in src/pages/ is skipped even for .ts files."""
+    from evaluator_cog.engine.deterministic import check_hardcoded_time_values
+
+    src = tmp_path / "src" / "pages"
+    src.mkdir(parents=True)
+    (src / "helpers.ts").write_text(
+        "export const delay = () => setTimeout(() => {}, 300);\n"
+    )
+    assert check_hardcoded_time_values(tmp_path, language="typescript") == []
+
+
+def test_test_013_still_flags_backend_ts(tmp_path: Path) -> None:
+    """TEST-013: setTimeout in non-UI .ts files still flagged."""
+    from evaluator_cog.engine.deterministic import check_hardcoded_time_values
+
+    src = tmp_path / "src" / "services"
+    src.mkdir(parents=True)
+    (src / "retry.ts").write_text("export function retry() { setTimeout(fn, 5000); }\n")
+    findings = check_hardcoded_time_values(tmp_path, language="typescript")
+    assert len(findings) == 1
