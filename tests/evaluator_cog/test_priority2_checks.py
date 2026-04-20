@@ -382,3 +382,58 @@ def test_xstack001_ts_workspace_root_dep_satisfies(tmp_path: Path) -> None:
         )
         == []
     )
+
+
+# --- TEST-011 -----------------------------------------------------------------
+
+
+def test_test_011_accepts_assert_not_called(tmp_path: Path) -> None:
+    """TEST-011: assert_not_called() is a valid assertion."""
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "from unittest.mock import MagicMock\n"
+        "\n"
+        "def test_a():\n"
+        "    m = MagicMock()\n"
+        "    m.do.assert_not_called()\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
+
+
+def test_test_011_accepts_call_count(tmp_path: Path) -> None:
+    """TEST-011: .call_count comparisons count as assertions."""
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "from unittest.mock import MagicMock\n"
+        "\n"
+        "def test_a():\n"
+        "    m = MagicMock()\n"
+        "    m.do()\n"
+        "    m.do()\n"
+        "    assert m.do.call_count == 2\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
+
+
+def test_test_011_still_flags_unverified_mock(tmp_path: Path) -> None:
+    """TEST-011: mocks without any interrogation still get flagged."""
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "from unittest.mock import MagicMock\n"
+        "\n"
+        "def test_a():\n"
+        "    m = MagicMock()\n"
+        "    m.do()\n"
+        "    assert True\n"
+    )
+    findings = check_mock_assertions(tmp_path)
+    assert len(findings) == 1

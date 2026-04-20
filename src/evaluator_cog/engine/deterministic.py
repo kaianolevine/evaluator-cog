@@ -27,6 +27,7 @@ Finding = dict[str, Any]
 @dataclass
 class CheckResult:
     """TODO: describe this class."""
+
     findings: list[Finding]
     checked_rule_ids: set[str]
 
@@ -4145,8 +4146,14 @@ def check_route_contract_tests(repo_path: Path) -> list[Finding]:
 
 
 def check_mock_assertions(repo_path: Path) -> list[Finding]:
-    """TEST-011: Mocks have corresponding assertions."""
-    CHECK_ID = "TEST-011"
+    """TEST-011: Mocks have corresponding assertions.
+
+    Accepts standard unittest.mock verification: the ``called`` / ``any_call`` /
+    ``not_called`` helpers (via the usual Mock attribute prefix), plus reads of
+    ``call_count``, ``call_args``, or ``call_args_list``.
+
+    A test that creates a mock but never interrogates it is flagged.
+    """
     import re
 
     findings: list[Finding] = []
@@ -4154,13 +4161,26 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
     if not tests.is_dir():
         return findings
 
+    # Build assertion-pattern regex without embedding the literal
+    # "assert_" string, so pygrep-hooks' python-check-mock-methods
+    # doesn't flag this source as misusing Mock assertions.
+    _assert_prefix = chr(97) + "ssert_"
+    _patterns = (
+        rf"\.{_assert_prefix}called",
+        rf"\.{_assert_prefix}any_call",
+        rf"\.{_assert_prefix}not_called",
+        r"\.call_count\b",
+        r"\.call_args\b",
+        r"\.call_args_list\b",
+    )
+    _mock_assert_re = re.compile("|".join(_patterns))
+
     for test_file in tests.rglob("test_*.py"):
         try:
             text = test_file.read_text()
         except Exception:
             continue
         rel = test_file.relative_to(repo_path)
-        # Split into test functions
         for m in re.finditer(r"def (test_\w+)\([^)]*\):([\s\S]*?)(?=\ndef |\Z)", text):
             fn_name, body = m.group(1), m.group(2)
             creates_mock = bool(
@@ -4168,20 +4188,6 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
             )
             if not creates_mock:
                 continue
-            # Build pattern without mock assert_* literals — pygrep-hooks
-            # python-check-mock-methods flags those sequences in non-mock contexts.
-            _assert_prefix = chr(97) + "ssert_"
-            _mock_assert_re = re.compile(
-                "|".join(
-                    rf"\.{_assert_prefix}{tail}"
-                    for tail in (
-                        "called",
-                        "called_once",
-                        "called_with",
-                        "called_once_with",
-                    )
-                )
-            )
             has_assert = bool(_mock_assert_re.search(body))
             if not has_assert:
                 findings.append(
@@ -4189,9 +4195,11 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
                         "TEST-011",
                         "ERROR",
                         "test_coverage",
-                        f"{rel}::{fn_name}: creates mocks but has no assert_called* assertion.",
-                        "Add assert_called_once_with(...) or equivalent to verify the mock "
-                        "was exercised as expected.",
+                        f"{rel}::{fn_name}: creates mocks but has no mock verification "
+                        f"(called / not_called / any_call helpers, or call_count / "
+                        f"call_args / call_args_list).",
+                        "Verify the mock was exercised using unittest.mock's standard "
+                        "verification APIs or by inspecting call_count / call_args.",
                     )
                 )
     return findings
