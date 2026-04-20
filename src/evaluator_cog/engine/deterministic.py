@@ -26,6 +26,7 @@ Finding = dict[str, Any]
 
 @dataclass
 class CheckResult:
+    """TODO: describe this class."""
     findings: list[Finding]
     checked_rule_ids: set[str]
 
