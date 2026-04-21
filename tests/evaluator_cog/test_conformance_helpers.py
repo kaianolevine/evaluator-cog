@@ -55,8 +55,15 @@ def test_on_completion_swallows_urlopen_exception(monkeypatch) -> None:
     """Exceptions from urlopen are suppressed — _on_completion never raises."""
     monkeypatch.setenv("HEALTHCHECKS_URL_EVALUATOR", "https://hc-ping.com/test-uuid")
 
-    with patch("urllib.request.urlopen", side_effect=OSError("timeout")):
+    with patch(
+        "urllib.request.urlopen", side_effect=OSError("timeout")
+    ) as mock_urlopen:
+        # Must not raise — _on_completion uses suppress(Exception) internally
         _on_completion(None, None, None)
+
+    # Confirm urlopen was actually attempted (and thus its exception was swallowed,
+    # rather than _on_completion early-returning for some other reason).
+    mock_urlopen.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

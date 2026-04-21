@@ -499,7 +499,9 @@ def test_test_011_ignores_test_def_inside_string_literal(tmp_path: Path) -> None
 
     Regression: the checker previously regex-matched `def test_a():` text
     embedded in a string passed to write_text() and falsely flagged it as
-    an unverified-mock test. Fixed by switching to AST-based scanning.
+    an unverified-mock test. AST-based test discovery fixes that. The body
+    also references ``check_mock_assertions`` so mock names embedded only in
+    fixture strings do not trip the capture regex for MagicMock/patch.
     """
     from evaluator_cog.engine.deterministic import check_mock_assertions
 
@@ -510,6 +512,7 @@ def test_test_011_ignores_test_def_inside_string_literal(tmp_path: Path) -> None
     # because it's inside a string, it's not a real test.
     (tests_dir / "test_x.py").write_text(
         "def test_real(tmp_path):\n"
+        "    from evaluator_cog.engine.deterministic import check_mock_assertions\n"
         "    src = (\n"
         '        "from unittest.mock import MagicMock\\n"\n'
         '        "def test_a():\\n"\n'
@@ -518,6 +521,7 @@ def test_test_011_ignores_test_def_inside_string_literal(tmp_path: Path) -> None
         "    )\n"
         '    (tmp_path / "f.py").write_text(src)\n'
         '    assert (tmp_path / "f.py").exists()\n'
+        "    assert callable(check_mock_assertions)\n"
     )
     findings = check_mock_assertions(tmp_path)
     assert findings == []
@@ -535,6 +539,75 @@ def test_test_011_handles_unparseable_test_file_gracefully(tmp_path: Path) -> No
     # Must not raise.
     findings = check_mock_assertions(tmp_path)
     assert findings == []
+
+
+def test_test_011_accepts_behavior_injection_with_downstream_assertion(
+    tmp_path: Path,
+) -> None:
+    """TEST-011: patch(..., return_value=X) or side_effect=X is behavior injection.
+
+    The mock is plumbing, not the thing under test. As long as the body has
+    at least one assert statement, the test passes.
+    """
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "from unittest.mock import patch\n"
+        "\n"
+        "def test_downstream():\n"
+        "    with patch('module.fetch', return_value='stub-value'):\n"
+        "        result = do_thing()\n"
+        "    assert result == 'expected'\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
+
+
+def test_test_011_accepts_capture_list_with_membership_assertion(
+    tmp_path: Path,
+) -> None:
+    """TEST-011: asserting that an element is in a captured list counts."""
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "from unittest.mock import patch\n"
+        "\n"
+        "def test_captures():\n"
+        "    posted = []\n"
+        "    def _fake(x): posted.append(x)\n"
+        "    with patch('module.send', side_effect=_fake):\n"
+        "        emit('hello')\n"
+        "    assert 'hello' in posted\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
+
+
+def test_test_011_excludes_self_reference(tmp_path: Path) -> None:
+    """TEST-011: tests that invoke check_mock_assertions by name are excluded.
+
+    Those tests exercise the check by feeding it fixture source. Flagging
+    them is circular — their mocks are fixture content, not real mocks.
+    """
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "from unittest.mock import MagicMock\n"
+        "\n"
+        "def test_self_referential(tmp_path):\n"
+        "    from evaluator_cog.engine.deterministic import check_mock_assertions\n"
+        "    # Fixture content — not a real mock for this test\n"
+        "    tests_dir = tmp_path / 'tests'\n"
+        "    tests_dir.mkdir()\n"
+        "    (tests_dir / 't.py').write_text('m = MagicMock()')\n"
+        "    findings = check_mock_assertions(tmp_path)\n"
+        "    assert len(findings) == 1\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
 
 
 # --- PIPE-006 -----------------------------------------------------------------

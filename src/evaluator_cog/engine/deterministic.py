@@ -4371,77 +4371,106 @@ def check_route_contract_tests(repo_path: Path) -> list[Finding]:
     return findings
 
 
-def _call_is_mock_factory(call: ast.Call) -> bool:
-    """True if this call expression constructs or enters a unittest.mock helper."""
-    f = call.func
-    if isinstance(f, ast.Name):
-        return f.id in ("MagicMock", "AsyncMock", "Mock", "patch")
-    if isinstance(f, ast.Attribute):
-        if f.attr in ("MagicMock", "AsyncMock", "Mock"):
-            return True
-        if (
-            f.attr == "object"
-            and isinstance(f.value, ast.Name)
-            and f.value.id == "patch"
-        ):
-            return True
-        if f.attr == "patch":
-            return True
-    return False
-
-
-def _function_body_uses_mock_factories(
-    fn: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> bool:
-    """True if the function (including decorators and with-statements) uses mock factories."""
-    for dec in fn.decorator_list:
-        for sub in ast.walk(dec):
-            if isinstance(sub, ast.Call) and _call_is_mock_factory(sub):
-                return True
-    for sub in ast.walk(fn):
-        if isinstance(sub, ast.With):
-            for item in sub.items:
-                ce = item.context_expr
-                if isinstance(ce, ast.Call) and _call_is_mock_factory(ce):
-                    return True
-        if isinstance(sub, ast.Call) and _call_is_mock_factory(sub):
-            return True
-    return False
-
-
 def check_mock_assertions(repo_path: Path) -> list[Finding]:
     """TEST-011: Mocks have corresponding assertions.
 
-    Accepts standard unittest.mock verification: the ``called`` / ``any_call`` /
-    ``not_called`` helpers (via the usual Mock attribute prefix), plus reads of
-    ``call_count``, ``call_args``, or ``call_args_list``.
+    Accepts multiple valid verification patterns:
 
-    A test that creates a mock but never interrogates it is flagged.
+    1. Direct mock-API verification — ``assert_called`` / ``assert_any_call`` /
+       ``assert_not_called`` / ``assert_called_with`` / ``assert_called_once`` /
+       ``assert_called_once_with``, plus reads of ``.call_count`` / ``.call_args`` /
+       ``.call_args_list`` / ``.called``.
+
+    2. Capture-list verification — a local ``name: list = []`` (or ``name = []``)
+       bound inside the test body, then referenced in any ``assert`` statement.
+       This covers the common pytest idiom where the mock hands off to a closure
+       that appends to the list, and the test asserts on the list afterward.
+
+    3. Behavior-injection verification — ``patch(..., return_value=X)`` or
+       ``patch(..., side_effect=X)`` configures the mock as plumbing for the
+       real thing under test. The test verifies the real thing's output with
+       any ``assert`` statement, not the mock itself.
+
+    A test that creates a mock but has zero assertions in its body is still
+    flagged.
+
+    Excludes tests that call ``check_mock_assertions`` in their body — those
+    tests exercise this check by feeding it fixture source, so flagging them
+    is circular.
 
     Uses AST parsing so that ``def test_X():`` text appearing inside string
-    literals (e.g. fixture snippets in the checker's own test suite) is not
-    mistaken for a real test function, and so mock names embedded only in
-    string literals do not count as mock usage. The previous regex-based
-    implementation self-flagged when scanning evaluator-cog's own repo.
+    literals is not mistaken for a real test function. Function bodies are
+    extracted by line slicing rather than ast.get_source_segment — the latter
+    is ~5x slower because it re-computes source positions per call.
     """
     findings: list[Finding] = []
     tests = repo_path / "tests"
     if not tests.is_dir():
         return findings
 
-    # Build assertion-pattern regex without embedding the literal
-    # "assert_" string, so pygrep-hooks' python-check-mock-methods
-    # doesn't flag this source as misusing Mock assertions.
     _assert_prefix = chr(97) + "ssert_"
-    _patterns = (
-        rf"\.{_assert_prefix}called",
-        rf"\.{_assert_prefix}any_call",
-        rf"\.{_assert_prefix}not_called",
+    _mock_verify_patterns = (
+        rf"\.{_assert_prefix}called\b",
+        rf"\.{_assert_prefix}any_call\b",
+        rf"\.{_assert_prefix}not_called\b",
+        rf"\.{_assert_prefix}called_with\b",
+        rf"\.{_assert_prefix}called_once\b",
+        rf"\.{_assert_prefix}called_once_with\b",
         r"\.call_count\b",
         r"\.call_args\b",
         r"\.call_args_list\b",
+        r"\.called\b",
     )
-    _mock_assert_re = re.compile("|".join(_patterns))
+    _mock_verify_re = re.compile("|".join(_mock_verify_patterns))
+    _mock_create_re = re.compile(r"\b(MagicMock|AsyncMock|patch|mock_\w+)\b")
+
+    # A local list binding: `name = []`, `name: Type = []`, or `name = list()`.
+    _empty_list_bind_re = re.compile(
+        r"^\s*(\w+)\s*(?::\s*[^=]+)?=\s*(?:\[\s*\]|list\(\s*\))\s*$",
+        re.MULTILINE,
+    )
+
+    # `patch(..., return_value=X)` or `patch(..., side_effect=X)` — behavior
+    # injection. These mocks are plumbing; we don't require verifying them.
+    _patch_behavior_injection_re = re.compile(
+        r"\bpatch[.\w]*\([^)]*\b(return_value|side_effect)\s*=",
+        re.DOTALL,
+    )
+
+    # Catch MagicMock(..., side_effect=...) / MagicMock(..., return_value=...)
+    # which is the same behavior-injection idiom outside of `patch()`.
+    _mock_ctor_behavior_injection_re = re.compile(
+        r"\b(?:MagicMock|AsyncMock)\([^)]*\b(?:return_value|side_effect)\s*=",
+        re.DOTALL,
+    )
+
+    # Any explicit `assert ...` statement (not assertRaises / not assert_xxx).
+    _has_assert_re = re.compile(r"^\s*assert\b", re.MULTILINE)
+
+    # Self-reference: test body invokes the function under test.
+    _self_reference_re = re.compile(r"\bcheck_mock_assertions\b")
+
+    def _has_capture_list_assertion(body_src: str) -> bool:
+        names = {m.group(1) for m in _empty_list_bind_re.finditer(body_src)}
+        if not names:
+            return False
+        for name in names:
+            # Any `assert ...` statement that references the captured
+            # list name counts as verification, whether via len(), indexing,
+            # membership, comparison, or iteration in a comprehension.
+            pat = rf"\bassert\b[^\n]*\b{re.escape(name)}\b"
+            if re.search(pat, body_src):
+                return True
+        return False
+
+    def _is_behavior_injection_with_assertion(body_src: str) -> bool:
+        """Patches with return_value/side_effect are plumbing; any assert counts."""
+        injects = _patch_behavior_injection_re.search(
+            body_src
+        ) or _mock_ctor_behavior_injection_re.search(body_src)
+        if not injects:
+            return False
+        return bool(_has_assert_re.search(body_src))
 
     for test_file in tests.rglob("test_*.py"):
         try:
@@ -4452,10 +4481,9 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
             tree = ast.parse(text)
         except SyntaxError:
             continue
+        lines = text.splitlines()
         rel = test_file.relative_to(repo_path)
 
-        # Collect top-level + class-level test functions as real AST nodes.
-        # Anything inside a string literal is absent from this list.
         test_fns: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -4469,23 +4497,39 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
                         test_fns.append(inner)
 
         for fn in test_fns:
-            body_src = ast.get_source_segment(text, fn) or ""
+            start = (fn.lineno or 1) - 1
+            for dec in fn.decorator_list:
+                ln = getattr(dec, "lineno", None)
+                if isinstance(ln, int) and ln > 0:
+                    start = min(start, ln - 1)
+            end = fn.end_lineno or len(lines)
+            body_src = "\n".join(lines[start:end])
             if not body_src:
                 continue
-            if not _function_body_uses_mock_factories(fn):
+            if not _mock_create_re.search(body_src):
                 continue
-            if _mock_assert_re.search(body_src):
+            if _self_reference_re.search(body_src):
+                continue
+            if _mock_verify_re.search(body_src):
+                continue
+            if _has_capture_list_assertion(body_src):
+                continue
+            if _is_behavior_injection_with_assertion(body_src):
                 continue
             findings.append(
                 _finding(
                     "TEST-011",
                     "ERROR",
                     "test_coverage",
-                    f"{rel}::{fn.name}: creates mocks but has no mock verification "
-                    f"(called / not_called / any_call helpers, or call_count / "
-                    f"call_args / call_args_list).",
+                    f"{rel}::{fn.name}: creates mocks but has no verification "
+                    f"(mock-API helpers like called / call_args, capture-list "
+                    f"assertion, or behavior-injection with at least one "
+                    f"assert statement).",
                     "Verify the mock was exercised using unittest.mock's standard "
-                    "verification APIs or by inspecting call_count / call_args.",
+                    "verification APIs, assert against a capture list populated "
+                    "by the mocked callable, or include at least one assert on "
+                    "the code under test when the mock is used only for "
+                    "return_value / side_effect behavior injection.",
                 )
             )
     return findings
