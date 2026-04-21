@@ -105,6 +105,12 @@ def post_findings(
             continue
 
         violation_id = f.get("violation_id") or None
+        # Note: findings may carry `status`, `deferred`, and `downgraded`
+        # keys set by the v4.0.0 dispatch machinery in run_all_checks. The
+        # api-kaianolevine-com /v1/evaluations endpoint does not accept
+        # these fields (extra=forbid), so we do not forward them. The
+        # dispatch metadata is preserved on the in-process finding dicts
+        # for logging and for the LLM prompt, but not persisted server-side.
         payload = {
             "run_id": run_id,
             "repo": repo,
@@ -116,9 +122,6 @@ def post_findings(
             "standards_version": standards_version,
             "source": source,
             "violation_id": violation_id,
-            "rule_status": f.get("status") or None,
-            "deferred": bool(f.get("deferred", False)),
-            "downgraded": bool(f.get("downgraded", False)),
         }
         if latest and (
             str(latest.get("run_id") or "").strip() == str(run_id).strip()
