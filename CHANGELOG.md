@@ -1,3 +1,15 @@
+# [3.12.0](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.10...v3.12.0) (2026-04-21)
+
+
+### Bug Fixes
+
+* migration from standards part 1 of 4 ([3515d52](https://github.com/mini-app-polis/evaluator-cog/commit/3515d521d75922c97f986b3cbc483cf390fa2ee0))
+
+
+### Features
+
+* **evaluator-cog:** v4.0.0 PR 4 — route applies_to-absent rules to dedicated checks ([712261c](https://github.com/mini-app-polis/evaluator-cog/commit/712261ce6b36f6c52c17cc429b03e33f42d6cde3))
+
 ## [3.11.10](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.9...v3.11.10) (2026-04-21)
 
 
