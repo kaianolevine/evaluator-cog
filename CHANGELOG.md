@@ -1,3 +1,10 @@
+## [3.12.2](https://github.com/mini-app-polis/evaluator-cog/compare/v3.12.1...v3.12.2) (2026-04-21)
+
+
+### Bug Fixes
+
+* **evaluator:** stop flagging patch(target, replacement) as unverified and scope AUTH-001 to python api-services ([8340fd2](https://github.com/mini-app-polis/evaluator-cog/commit/8340fd229771046a7f1d020fa9c43c5933126e8f))
+
 ## [3.12.1](https://github.com/mini-app-polis/evaluator-cog/compare/v3.12.0...v3.12.1) (2026-04-21)
 
 
