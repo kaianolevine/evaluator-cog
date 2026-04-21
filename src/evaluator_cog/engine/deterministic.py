@@ -5043,7 +5043,6 @@ def _type_to_dod(repo_type: str, language: str = "python") -> str | None:
     mapping = {
         "pipeline-cog": "new_cog",
         "trigger-cog": "new_cog",
-        "evaluator-service": "new_cog",
         "api-service": "new_fastapi_service"
         if language == "python"
         else "new_hono_service",
@@ -5085,9 +5084,7 @@ def run_all_checks(
         # Type says "could be Python" (e.g. shared-library); ecosystem language is authoritative.
         is_python = (language == "python") and cfg.is_python_service
         is_library = cfg.is_shared_library
-        # Use the broader pipeline-style predicate so evaluator-service inherits
-        # the same PIPE-* / CD-015 / pipeline-cog-shaped tests as pipeline-cog.
-        is_pipeline_cog = cfg.is_pipeline_style
+        is_pipeline_cog = cfg.is_pipeline_cog
         is_fastapi = cfg.is_api_service and language == "python"
         # Language-agnostic api-service flag — for rules that apply to both
         # FastAPI (Python) and Hono (TypeScript) API services.

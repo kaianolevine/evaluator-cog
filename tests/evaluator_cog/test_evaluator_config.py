@@ -193,7 +193,6 @@ def test_is_skipped_auto_and_explicit() -> None:
         ("static-site", "static-site"),
         ("react-app", "react-app"),
         ("standards-repo", "standards-repo"),
-        ("evaluator-service", "evaluator-service"),
         (None, "shared-library"),
         ("unknown-legacy-value", "pipeline-cog"),
     ],
@@ -222,10 +221,6 @@ def test_map_legacy_type(legacy: str | None, expected: str) -> None:
         ("static-site", False, False, False, False, True, False, False, True),
         ("react-app", False, False, False, False, False, True, False, True),
         ("standards-repo", False, False, False, False, False, False, True, False),
-        # evaluator-service shares no narrow boolean with any of the others — it
-        # is its own category. is_pipeline_style coverage lives in a dedicated
-        # test below.
-        ("evaluator-service", False, False, False, False, False, False, False, False),
     ],
 )
 def test_evaluator_config_boolean_properties(
@@ -259,84 +254,19 @@ def test_language_property_returns_typescript_for_non_python_types() -> None:
         )
 
 
-def test_is_evaluator_service_is_strict() -> None:
-    """is_evaluator_service is True only for the evaluator-service type."""
-    assert EvaluatorConfig(repo_type="evaluator-service").is_evaluator_service is True
-    for other in (
-        "pipeline-cog",
-        "trigger-cog",
-        "api-service",
-        "shared-library",
-        "static-site",
-        "react-app",
-        "standards-repo",
-    ):
-        assert EvaluatorConfig(repo_type=other).is_evaluator_service is False
+def test_parse_evaluator_yaml_rejects_evaluator_service_type() -> None:
+    """evaluator-service was removed from the type taxonomy in v4.0.0
+    (ADR-004). Any evaluator.yaml declaring it must be rejected."""
+    with pytest.raises(ValueError, match="invalid type"):
+        _parse_evaluator_yaml({"type": "evaluator-service"})
 
 
-def test_is_pipeline_style_covers_pipeline_cog_and_evaluator_service() -> None:
-    """
-    is_pipeline_style is the engine-level predicate meaning "runs Prefect
-    flows and carries pipeline-cog-shaped rule applicability." It must
-    return True for both pipeline-cog and evaluator-service, and False
-    for every other type — otherwise pipeline rules leak to non-pipeline
-    repos or miss evaluator-service.
-    """
-    assert EvaluatorConfig(repo_type="pipeline-cog").is_pipeline_style is True
-    assert EvaluatorConfig(repo_type="evaluator-service").is_pipeline_style is True
-    for other in (
-        "trigger-cog",
-        "api-service",
-        "shared-library",
-        "static-site",
-        "react-app",
-        "standards-repo",
-    ):
-        assert EvaluatorConfig(repo_type=other).is_pipeline_style is False
-
-
-def test_evaluator_service_is_python_service_and_language() -> None:
-    """evaluator-service is a Python service and reports language='python'."""
-    cfg = EvaluatorConfig(repo_type="evaluator-service")
-    assert cfg.is_python_service is True
-    assert cfg.language == "python"
-
-
-def test_evaluator_service_no_catalog_trait_only() -> None:
-    """Without a catalog, evaluator-service has only trait/explicit skips."""
-    cfg = EvaluatorConfig(repo_type="evaluator-service")
-    assert cfg.all_skipped_ids == frozenset()
-
-
-def test_evaluator_service_with_catalog_derives_from_applies_to() -> None:
-    """With a catalog, evaluator-service skips rules whose applies_to
-    does not list it — consistent with the repo owner's standing ruling
-    that ecosystem-standards is always authoritative."""
-    catalog = {
-        # applies_to lists evaluator-service -> NOT skipped
-        "EVAL-003": ["evaluator-service"],
-        "MONO-003": ["evaluator-service"],
-        # applies_to excludes evaluator-service -> skipped
-        "API-001": ["api-service"],
-        "FE-001": ["static-site"],
-        "PIPE-001": ["pipeline-cog", "trigger-cog"],
-        # applies_to='all' -> NOT skipped
-        "DOC-001": ["all"],
-    }
-    cfg = EvaluatorConfig(repo_type="evaluator-service", rule_applies_to=catalog)
-    skipped = cfg.all_skipped_ids
-    assert "EVAL-003" not in skipped
-    assert "MONO-003" not in skipped
-    assert "API-001" in skipped
-    assert "FE-001" in skipped
-    assert "PIPE-001" in skipped
-    assert "DOC-001" not in skipped
-
-
-def test_load_evaluator_yaml_accepts_evaluator_service_type(tmp_path: Path) -> None:
-    """A fresh evaluator.yaml declaring type: evaluator-service parses cleanly."""
-    (tmp_path / "evaluator.yaml").write_text("type: evaluator-service\n")
-    cfg = load_evaluator_config(tmp_path)
-    assert cfg.repo_type == "evaluator-service"
-    assert cfg.is_evaluator_service is True
-    assert cfg.is_pipeline_style is True
+def test_parse_evaluator_yaml_rejects_pre_rule_trait(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """pre-rule was removed from the trait taxonomy in v4.0.0. It is
+    now an unknown trait; unknown traits are warned and ignored."""
+    with caplog.at_level("WARNING"):
+        cfg = _parse_evaluator_yaml({"type": "pipeline-cog", "traits": ["pre-rule"]})
+    assert cfg.traits == []
+    assert any("unknown trait" in r.message for r in caplog.records)

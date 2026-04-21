@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from evaluator_cog.engine.deterministic import CheckResult
 from evaluator_cog.engine.evaluator_config import EvaluatorConfig
 from evaluator_cog.flows.conformance import (
@@ -194,6 +196,7 @@ def _fake_fetch_standards(url: str) -> dict:
             "standards": [
                 {
                     "id": "PIPELINE-RULE",
+                    "status": "requirement",
                     "checkable": True,
                     "applies_to": ["pipeline-cog"],
                     "title": "Pipeline-only",
@@ -207,6 +210,7 @@ def _fake_fetch_standards(url: str) -> dict:
             "standards": [
                 {
                     "id": "LEGACY-COG-RULE",
+                    "status": "convention",
                     "checkable": True,
                     "applies_to": ["new_cog"],
                     "title": "Legacy cog",
@@ -241,6 +245,39 @@ def test_fetch_standards_falls_back_to_dod_type_when_no_evaluator_cfg() -> None:
         rules = _fetch_standards_for_service(service, None)
     ids = {r["id"] for r in rules}
     assert "LEGACY-COG-RULE" in ids
+
+
+def test_fetch_standards_rejects_invalid_rule_status() -> None:
+    """v4.0.0 catalog allows only requirement / convention / gap.
+    A rule with status 'advisory' or 'idea' must be rejected."""
+
+    def _fake_fetch(url: str) -> dict:
+        if url.endswith("/principles.yaml"):
+            return {
+                "standards": [
+                    {
+                        "id": "PRIN-999",
+                        "status": "advisory",  # invalid in v4.0.0
+                        "checkable": True,
+                        "applies_to": ["all"],
+                        "title": "Legacy advisory rule",
+                        "severity": "INFO",
+                        "check_notes": "DETERMINISTIC CHECK. ...",
+                    },
+                ]
+            }
+        return {"standards": []}
+
+    service = {"id": "x", "dod_type": "new_cog"}
+    cfg = EvaluatorConfig(repo_type="pipeline-cog")
+    with (
+        patch(
+            "evaluator_cog.flows.conformance._fetch_yaml",
+            side_effect=_fake_fetch,
+        ),
+        pytest.raises(ValueError, match="invalid status"),
+    ):
+        _fetch_standards_for_service(service, cfg)
 
 
 def test_run_standalone_deterministic_calls_load_evaluator_config(

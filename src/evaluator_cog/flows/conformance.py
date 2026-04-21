@@ -55,6 +55,7 @@ _ECOSYSTEM_STANDARDS_INDEX_URL = os.environ.get(
     "ECOSYSTEM_STANDARDS_INDEX_URL",
     "https://raw.githubusercontent.com/mini-app-polis/ecosystem-standards/main/index.yaml",
 )
+_VALID_RULE_STATUSES: frozenset[str] = frozenset({"requirement", "convention", "gap"})
 
 # Canonical fallback list used only when index.yaml cannot be fetched.
 # Keep this in sync with ecosystem-standards/index.yaml::files (any entry
@@ -262,9 +263,18 @@ def _fetch_standards_for_service(
     def _to_rule_dict(rule: dict) -> dict:
         check_notes = (rule.get("check_notes") or "").strip()
         rule_id = str(rule.get("id") or "")
+        status = str(rule.get("status") or "").strip()
+        if status not in _VALID_RULE_STATUSES:
+            raise ValueError(
+                f"Rule {rule_id}: invalid status '{status}'. "
+                f"Must be one of {sorted(_VALID_RULE_STATUSES)}. "
+                f"The catalog is v4.0.0 — 'advisory' and 'idea' are "
+                f"no longer valid values."
+            )
         return {
             "id": rule_id,
             "title": rule.get("title", ""),
+            "status": status,
             "severity": rule.get("severity", "INFO"),
             "check_notes": check_notes,
             "check_mode": classify_check_mode(rule_id, check_notes),
