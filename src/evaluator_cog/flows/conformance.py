@@ -213,6 +213,33 @@ def _resolve_standards_domains() -> list[str]:
     return live_domains
 
 
+def _fetch_full_rule_catalog() -> dict[str, list[str]]:
+    """Fetch every checkable rule's applies_to list from every standards
+    file. Returns a {rule_id: applies_to_list} dict covering the entire
+    catalog, type-agnostic.
+
+    Used by load_evaluator_config to derive type-based auto-exceptions
+    from the live catalog rather than a hardcoded table.
+
+    Never raises. Returns {} on fetch failure — callers should treat an
+    empty result as "no catalog available" and fall back to trait-only
+    skip logic. _fetch_yaml already logs warnings on per-file failure.
+    """
+    domains = _resolve_standards_domains()
+    catalog: dict[str, list[str]] = {}
+    for domain in domains:
+        url = f"{_STANDARDS_BASE_URL}/{domain}.yaml"
+        data = _fetch_yaml(url)
+        for rule in data.get("standards", []) or []:
+            if not rule.get("checkable"):
+                continue
+            rule_id = str(rule.get("id") or "").strip()
+            applies = rule.get("applies_to") or []
+            if rule_id and isinstance(applies, list):
+                catalog[rule_id] = [str(x) for x in applies]
+    return catalog
+
+
 def _fetch_standards_for_service(
     service: dict, evaluator_cfg: EvaluatorConfig | None = None
 ) -> list[dict]:
@@ -399,6 +426,7 @@ def run_conformance_check(
     post: bool = True,
     post_llm_only: bool = False,
     evaluator_config: EvaluatorConfig | None = None,
+    rule_applies_to: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run deterministic + LLM conformance checks against a cloned repo.
@@ -512,6 +540,7 @@ def _run_standalone_conformance(
     standards_version: str,
     run_id: str,
     prefect_log: Any,
+    rule_applies_to: dict[str, list[str]] | None = None,
 ) -> None:
     """Run full conformance for a single cloned service (posts immediately)."""
     repo_id = service.get("id", "")
@@ -531,6 +560,7 @@ def _run_standalone_conformance(
         fallback_type=service.get("type") or dod_type,
         fallback_exceptions=check_exceptions,
         fallback_exception_reasons=exception_reasons,
+        rule_applies_to=rule_applies_to,
     )
 
     standards_rules = _fetch_standards_for_service(service, evaluator_cfg)
@@ -550,6 +580,7 @@ def _run_standalone_conformance(
             post=True,
             post_llm_only=True,
             evaluator_config=evaluator_cfg,
+            rule_applies_to=rule_applies_to,
         )
         _ = all_findings
         prefect_log.info(
@@ -601,6 +632,7 @@ def _run_standalone_deterministic(
     prefect_log: Any,
     monorepo_root: Path | None = None,
     workspace_package_json_text: str | None = None,
+    rule_applies_to: dict[str, list[str]] | None = None,
 ) -> None:
     """Run deterministic-only checks for a single service and post immediately."""
     repo_id = service.get("id", "")
@@ -622,6 +654,7 @@ def _run_standalone_deterministic(
         fallback_type=service.get("type") or dod_type,
         fallback_exceptions=check_exceptions,
         fallback_exception_reasons=exception_reasons,
+        rule_applies_to=rule_applies_to,
     )
     # For monorepo apps the evaluator.yaml may live at the app path
     if monorepo_root and not (check_root / "evaluator.yaml").exists():
@@ -630,6 +663,7 @@ def _run_standalone_deterministic(
             fallback_type=service.get("type") or dod_type,
             fallback_exceptions=check_exceptions,
             fallback_exception_reasons=exception_reasons,
+            rule_applies_to=rule_applies_to,
         )
 
     prefect_log.info(
@@ -700,6 +734,13 @@ def conformance_check_flow(run_llm: bool = False) -> None:
 
     standards_version = _get_standards_version()
     prefect_log.info("%s: standards version %s", flow_label, standards_version)
+    rule_applies_to = _fetch_full_rule_catalog()
+    if not rule_applies_to:
+        prefect_log.warning(
+            "%s: full rule catalog empty — type-based auto-exceptions "
+            "disabled for this run",
+            flow_label,
+        )
 
     ecosystem = _fetch_yaml(_ECOSYSTEM_YAML_URL)
     active_repos = _get_active_repos(ecosystem)
@@ -755,11 +796,21 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                 try:
                     if run_llm:
                         _run_standalone_conformance(
-                            service, repo_path, standards_version, run_id, prefect_log
+                            service,
+                            repo_path,
+                            standards_version,
+                            run_id,
+                            prefect_log,
+                            rule_applies_to=rule_applies_to,
                         )
                     else:
                         _run_standalone_deterministic(
-                            service, repo_path, standards_version, run_id, prefect_log
+                            service,
+                            repo_path,
+                            standards_version,
+                            run_id,
+                            prefect_log,
+                            rule_applies_to=rule_applies_to,
                         )
                 except Exception as exc:
                     prefect_log.error(
@@ -792,11 +843,21 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                         try:
                             if run_llm:
                                 _run_standalone_conformance(
-                                    svc, rp, standards_version, run_id, prefect_log
+                                    svc,
+                                    rp,
+                                    standards_version,
+                                    run_id,
+                                    prefect_log,
+                                    rule_applies_to=rule_applies_to,
                                 )
                             else:
                                 _run_standalone_deterministic(
-                                    svc, rp, standards_version, run_id, prefect_log
+                                    svc,
+                                    rp,
+                                    standards_version,
+                                    run_id,
+                                    prefect_log,
+                                    rule_applies_to=rule_applies_to,
                                 )
                         except Exception as exc:
                             prefect_log.error(
@@ -901,6 +962,7 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     fallback_type=service.get("type") or dod_type,
                                     fallback_exceptions=check_exceptions,
                                     fallback_exception_reasons=exception_reasons,
+                                    rule_applies_to=rule_applies_to,
                                 )
                                 if (
                                     monorepo_root
@@ -911,6 +973,7 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                         fallback_type=service.get("type") or dod_type,
                                         fallback_exceptions=check_exceptions,
                                         fallback_exception_reasons=exception_reasons,
+                                        rule_applies_to=rule_applies_to,
                                     )
                                 run_conformance_check(
                                     repo_id=repo_id,
@@ -930,6 +993,7 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     post=True,
                                     post_llm_only=True,
                                     evaluator_config=_evaluator_cfg,
+                                    rule_applies_to=rule_applies_to,
                                 )
                                 prefect_log.info(
                                     "conformance: posted LLM findings for monorepo app %s",
@@ -949,6 +1013,7 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     fallback_type=service.get("type") or dod_type,
                                     fallback_exceptions=check_exceptions,
                                     fallback_exception_reasons=exception_reasons,
+                                    rule_applies_to=rule_applies_to,
                                 )
                                 if (
                                     monorepo_root
@@ -959,6 +1024,7 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                         fallback_type=service.get("type") or dod_type,
                                         fallback_exceptions=check_exceptions,
                                         fallback_exception_reasons=exception_reasons,
+                                        rule_applies_to=rule_applies_to,
                                     )
                                 result = run_all_checks(
                                     repo_path,

@@ -43,149 +43,6 @@ VALID_TRAITS = {
     "pre-rule",
 }
 
-# Rules automatically excepted by type — derived from ADR-002 applicability table.
-# Keys are repo types; values are sets of rule IDs that do not apply.
-_TYPE_AUTO_EXCEPTIONS: dict[str, set[str]] = {
-    "shared-library": {
-        "CD-002",
-        "CD-009",
-        "CD-010",
-        "PY-006",
-        "PY-012",  # FAILED_ prefix — file-processing cog pattern, not applicable to libraries
-        "PY-013",  # possible_duplicate_ prefix — file-processing cog pattern, not applicable to libraries
-        "PY-014",  # finally cleanup — file-processing cog pattern, not applicable to libraries
-        "TEST-001",
-        "TEST-002",
-        "TEST-003",
-        "TEST-004",
-        "TEST-007",  # respx/pytest HTTP mocking — Python-only; skip TS libs defensively
-        "PIPE-001",
-        "PIPE-002",
-        "PIPE-003",
-        "PIPE-004",
-        "PIPE-005",
-        "PIPE-006",
-        "PIPE-007",
-        "PIPE-008",
-        "PIPE-009",
-        "PIPE-011",
-        "PIPE-012",
-        "CD-007",
-        "CD-015",
-        "XSTACK-001",
-    },
-    "static-site": {
-        "CD-002",
-        "CD-009",
-        "CD-010",
-        "TEST-001",
-        "TEST-002",
-        "TEST-003",
-        "TEST-004",
-        "PIPE-001",
-        "PIPE-002",
-        "PIPE-003",
-        "PIPE-004",
-        "PIPE-005",
-        "PIPE-006",
-        "PIPE-007",
-        "PIPE-008",
-        "PIPE-009",
-        "PIPE-011",
-        "PIPE-012",
-        "CD-007",
-        "CD-015",
-        "XSTACK-001",
-        "XSTACK-003",
-    },
-    "react-app": {
-        "TEST-001",
-        "TEST-002",
-        "TEST-003",
-        "TEST-004",
-        "PIPE-001",
-        "PIPE-002",
-        "PIPE-003",
-        "PIPE-004",
-        "PIPE-005",
-        "PIPE-006",
-        "PIPE-007",
-        "PIPE-008",
-        "PIPE-009",
-        "PIPE-011",
-        "PIPE-012",
-        "CD-007",
-        "CD-015",
-    },
-    "api-service": {
-        "TEST-001",
-        "TEST-002",
-        "TEST-003",
-        "TEST-004",
-        "PIPE-001",
-        "PIPE-002",
-        "PIPE-003",
-        "PIPE-004",
-        "PIPE-005",
-        "PIPE-006",
-        "PIPE-007",
-        "PIPE-008",
-        "PIPE-009",
-        "PIPE-011",
-        "PIPE-012",
-        "CD-007",
-        "CD-015",
-    },
-    "trigger-cog": {
-        "TEST-001",
-        "TEST-002",
-        "TEST-003",
-        "TEST-004",
-        # PIPE-001 is NOT auto-excepted — its applies_to list in the standards
-        # catalog includes `trigger-cog` because trigger cogs need Prefect too
-        # (to call the Prefect client for downstream flow runs). The other
-        # PIPE rules below are excepted because they target data-processing
-        # behavior that trigger cogs don't have.
-        "PIPE-002",
-        "PIPE-003",
-        "PIPE-004",
-        "PIPE-005",
-        "PIPE-006",
-        "PIPE-007",
-        "PIPE-008",
-        "PIPE-009",
-        "PIPE-011",
-        "PIPE-012",
-        "CD-015",
-    },
-    "pipeline-cog": set(),  # All rules apply — no automatic exceptions
-    "evaluator-service": set(),  # All rules apply — mirrors pipeline-cog
-    "standards-repo": {
-        "CD-002",
-        "CD-009",
-        "CD-010",
-        "TEST-001",
-        "TEST-002",
-        "TEST-003",
-        "TEST-004",
-        "PIPE-001",
-        "PIPE-002",
-        "PIPE-003",
-        "PIPE-004",
-        "PIPE-005",
-        "PIPE-006",
-        "PIPE-007",
-        "PIPE-008",
-        "PIPE-009",
-        "PIPE-011",
-        "PIPE-012",
-        "CD-007",
-        "CD-015",
-        "XSTACK-001",
-        "PY-006",
-    },
-}
-
 # Rules automatically excepted by trait
 _TRAIT_AUTO_EXCEPTIONS: dict[str, set[str]] = {
     "logger-primitive": {"CD-009", "XSTACK-001"},
@@ -196,9 +53,38 @@ _TRAIT_AUTO_EXCEPTIONS: dict[str, set[str]] = {
 }
 
 
+# One-shot warning latch — when an EvaluatorConfig is constructed without
+# a catalog (rule_applies_to unset), type-based auto-exceptions cannot be
+# derived and only trait exceptions + explicit exemptions apply. We warn
+# once per process so tests and migration-period callers don't spam logs.
+_WARNED_NO_CATALOG = False
+
+
+def _warn_once_no_catalog() -> None:
+    global _WARNED_NO_CATALOG
+    if _WARNED_NO_CATALOG:
+        return
+    _WARNED_NO_CATALOG = True
+    log.warning(
+        "evaluator_config: EvaluatorConfig constructed without a catalog "
+        "(rule_applies_to unset) — type-based auto-exceptions disabled, "
+        "only trait exceptions and explicit exemptions apply. This is "
+        "expected in unit tests; a warning in production indicates the "
+        "catalog fetch failed."
+    )
+
+
 @dataclass
 class EvaluatorConfig:
-    """Parsed and validated contents of a repo's evaluator.yaml."""
+    """Parsed and validated contents of a repo's evaluator.yaml.
+
+    When `rule_applies_to` is provided (a dict mapping rule_id -> the rule's
+    applies_to list from the standards catalog), `all_skipped_ids` derives
+    type-based auto-exceptions at runtime: any checkable rule whose
+    applies_to list does not include this repo type (and does not include
+    'all') is skipped. When the catalog is absent, only trait exceptions
+    and explicit exemptions apply, and a one-time warning is logged.
+    """
 
     repo_type: str
     traits: list[str] = field(default_factory=list)
@@ -207,12 +93,22 @@ class EvaluatorConfig:
     deferral_ids: list[str] = field(default_factory=list)
     deferral_reasons: dict[str, str] = field(default_factory=dict)
     source: str = "evaluator.yaml"
+    rule_applies_to: dict[str, list[str]] | None = None
 
     @property
     def all_skipped_ids(self) -> frozenset[str]:
-        """TODO: describe this function."""
+        """Return the full set of rule IDs the evaluator will skip for this
+        repo: type-based (derived from applies_to), trait-based, and
+        explicit exemptions declared in evaluator.yaml."""
         skipped: set[str] = set()
-        skipped.update(_TYPE_AUTO_EXCEPTIONS.get(self.repo_type, set()))
+        if self.rule_applies_to is not None:
+            for rule_id, applies in self.rule_applies_to.items():
+                if "all" in applies:
+                    continue
+                if self.repo_type not in applies:
+                    skipped.add(rule_id)
+        else:
+            _warn_once_no_catalog()
         for trait in self.traits:
             skipped.update(_TRAIT_AUTO_EXCEPTIONS.get(trait, set()))
         skipped.update(self.exemption_ids)
@@ -317,19 +213,26 @@ def load_evaluator_config(
     fallback_type: str | None = None,
     fallback_exceptions: list[str] | None = None,
     fallback_exception_reasons: dict[str, str] | None = None,
+    rule_applies_to: dict[str, list[str]] | None = None,
 ) -> EvaluatorConfig:
     """Load and return the EvaluatorConfig for a repo.
 
     Reads evaluator.yaml from repo_path if present; falls back to a config
     derived from the provided fallback_type and exception lists if absent or
     unparseable. Never raises.
+
+    `rule_applies_to`, when provided, is attached to the returned
+    EvaluatorConfig so `all_skipped_ids` can derive type-based skips from
+    the live catalog. When absent, only trait and explicit exemptions apply.
     """
     evaluator_yaml = repo_path / "evaluator.yaml"
 
     if evaluator_yaml.exists():
         try:
             raw = yaml.safe_load(evaluator_yaml.read_text()) or {}
-            return _parse_evaluator_yaml(raw, source="evaluator.yaml")
+            cfg = _parse_evaluator_yaml(raw, source="evaluator.yaml")
+            cfg.rule_applies_to = rule_applies_to
+            return cfg
         except Exception as exc:
             log.warning(
                 "evaluator_config: failed to parse evaluator.yaml at %s: %s — falling back",
@@ -337,11 +240,13 @@ def load_evaluator_config(
                 exc,
             )
 
-    return _build_fallback_config(
+    cfg = _build_fallback_config(
         fallback_type=fallback_type,
         fallback_exceptions=fallback_exceptions or [],
         fallback_exception_reasons=fallback_exception_reasons or {},
     )
+    cfg.rule_applies_to = rule_applies_to
+    return cfg
 
 
 def _parse_evaluator_yaml(raw: dict, source: str = "evaluator.yaml") -> EvaluatorConfig:

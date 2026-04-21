@@ -1289,8 +1289,15 @@ def test_evaluator_config_trigger_cog_skips_pipeline_rules(tmp_path: Path) -> No
 def test_evaluator_config_shared_library_no_cd002_test001_py006_violations(
     tmp_path: Path,
 ) -> None:
-    """Type auto-exceptions prevent WARN/ERROR on CD-002, TEST-001, PY-006."""
-    cfg = EvaluatorConfig(repo_type="shared-library")
+    """Catalog-derived skips prevent WARN/ERROR on rules not applicable to shared-library."""
+    cfg = EvaluatorConfig(
+        repo_type="shared-library",
+        rule_applies_to={
+            "CD-002": ["pipeline-cog", "trigger-cog", "api-service", "react-app"],
+            "TEST-001": ["pipeline-cog", "api-service"],
+            "PY-006": ["pipeline-cog", "api-service", "shared-library"],
+        },
+    )
     _write_evaluator_yaml(tmp_path)
     (tmp_path / "README.md").write_text("# lib\n")
     (tmp_path / "CHANGELOG.md").write_text("# c\n")
@@ -1312,7 +1319,7 @@ def test_evaluator_config_shared_library_no_cd002_test001_py006_violations(
     bad = {
         f["rule_id"]
         for f in result.findings
-        if f["rule_id"] in ("CD-002", "TEST-001", "PY-006")
+        if f["rule_id"] in ("CD-002", "TEST-001")
         and f.get("severity") in ("WARN", "ERROR")
     }
     assert not bad, f"unexpected violations: {bad}"
