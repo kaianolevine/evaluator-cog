@@ -1,3 +1,10 @@
+## [3.11.8](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.7...v3.11.8) (2026-04-21)
+
+
+### Bug Fixes
+
+* addressing test TEST-011 expansion ([a4afbb1](https://github.com/mini-app-polis/evaluator-cog/commit/a4afbb15c9bc07ad46feeb29fd6156d8695ddaf7))
+
 ## [3.11.7](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.6...v3.11.7) (2026-04-21)
 
 
