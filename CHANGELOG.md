@@ -1,3 +1,10 @@
+## [3.11.10](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.9...v3.11.10) (2026-04-21)
+
+
+### Bug Fixes
+
+* **llm:** remove stale per-type exception prose and severity contradiction ([8388408](https://github.com/mini-app-polis/evaluator-cog/commit/83884089158b8dc3cd1ab0a71055a5901610d498))
+
 ## [3.11.9](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.8...v3.11.9) (2026-04-21)
 
 
