@@ -5240,7 +5240,18 @@ def check_eval_007(
     current_standards_version: str = "",
     evaluator_standards_version: str = "",
 ) -> list[Finding]:
-    """EVAL-007: Standards/evaluator check coverage must be tracked and in sync."""
+    """EVAL-007: Standards/evaluator check coverage must be tracked and in sync.
+
+    LLM-routed rules (those with `check_notes` starting with
+    `LLM CHECK.`) are excluded from the unimplemented set — they are
+    correctly handled on the LLM path and do not require a
+    deterministic CHECK_ID constant. Rules whose catalog entry carries
+    ``check_mode == "llm"`` are filtered before comparing against
+    implemented CHECK_IDs. Catalog entries missing a `check_mode`
+    field default to the pre-filter behaviour (treated as
+    deterministic), preserving behaviour for tests and legacy
+    callers that build rule_catalog dicts by hand.
+    """
     CHECK_ID = "EVAL-007"
     if not rule_catalog:
         return []
@@ -5254,10 +5265,17 @@ def check_eval_007(
         re.findall(r'CHECK_ID\s*=\s*"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"', this_module_src)
     )
 
-    checkable_ids = set(rule_catalog.keys())
+    # Only deterministic rules require a CHECK_ID constant. LLM rules
+    # are dispatched through engine/llm.py and should not be flagged
+    # as missing.
+    deterministic_ids = {
+        rid
+        for rid, meta in rule_catalog.items()
+        if (meta or {}).get("check_mode", "deterministic") != "llm"
+    }
 
-    unimplemented = sorted(checkable_ids - impl_ids)
-    orphaned = sorted(impl_ids - checkable_ids)
+    unimplemented = sorted(deterministic_ids - impl_ids)
+    orphaned = sorted(impl_ids - set(rule_catalog.keys()))
 
     for rid in unimplemented:
         findings.append(

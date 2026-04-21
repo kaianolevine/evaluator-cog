@@ -276,13 +276,19 @@ def _fetch_full_rule_catalog() -> dict[str, dict]:
     """Fetch every checkable rule's metadata from every standards file.
 
     Returns {rule_id: {"applies_to": list[str] | None, "modifies": list[str],
-                       "status": str}} covering the entire catalog.
+                       "status": str, "check_mode": "deterministic" | "llm"}}
+    covering the entire catalog.
 
     `applies_to` is None when the rule omits the field entirely (v4.0.0
     semantics: the rule is not a repo-source scan — see ADR-004). An
     explicit empty list `[]` is also treated as None for dispatch
     purposes, though the catalog does not currently contain any such
     rules.
+
+    `check_mode` is derived from the DETERMINISTIC CHECK. / LLM CHECK.
+    marker on each rule's check_notes. Used by EVAL-007 to avoid
+    flagging LLM-routed rules as "unimplemented" just because they
+    have no deterministic CHECK_ID constant.
 
     Used by PR 3's dispatch to derive type-based scope from the live
     catalog rather than a hardcoded table. Used by PR 4 for modifier
@@ -317,10 +323,12 @@ def _fetch_full_rule_catalog() -> dict[str, dict]:
                 if isinstance(raw_modifies, list)
                 else []
             )
+            check_notes = str(rule.get("check_notes") or "").strip()
             catalog[rule_id] = {
                 "applies_to": applies_to,
                 "modifies": modifies,
                 "status": str(rule.get("status") or "").strip(),
+                "check_mode": classify_check_mode(rule_id, check_notes),
             }
     return catalog
 

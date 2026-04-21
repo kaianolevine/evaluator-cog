@@ -1598,6 +1598,31 @@ def test_check_eval_007_flags_unimplemented_rules() -> None:
     )
 
 
+def test_check_eval_007_skips_llm_routed_rules() -> None:
+    """LLM-routed rules are handled in engine/llm.py and must not be
+    flagged as unimplemented by EVAL-007 just because they have no
+    deterministic CHECK_ID constant."""
+    catalog = {
+        "LLM-ONLY-001": {
+            "applies_to": ["all"],
+            "modifies": [],
+            "status": "requirement",
+            "check_mode": "llm",
+        },
+        "DET-MISSING-002": {
+            "applies_to": ["all"],
+            "modifies": [],
+            "status": "requirement",
+            "check_mode": "deterministic",
+        },
+    }
+    findings = check_eval_007(rule_catalog=catalog)
+    # LLM rule must not appear as unimplemented
+    assert not any("LLM-ONLY-001" in f["finding"] for f in findings)
+    # Deterministic rule without CHECK_ID must still be flagged
+    assert any("DET-MISSING-002" in f["finding"] for f in findings)
+
+
 def test_check_eval_007_no_catalog_returns_empty() -> None:
     assert check_eval_007(rule_catalog=None) == []
     assert check_eval_007(rule_catalog={}) == []
