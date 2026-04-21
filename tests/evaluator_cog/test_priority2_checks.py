@@ -610,6 +610,72 @@ def test_test_011_excludes_self_reference(tmp_path: Path) -> None:
     assert check_mock_assertions(tmp_path) == []
 
 
+def test_test_011_accepts_patch_with_replacement_class(tmp_path: Path) -> None:
+    """TEST-011: patch(target, ReplacementClass) is behavior injection.
+
+    The replacement class (or callable) supplants the target for the
+    duration of the patch. The test then asserts on real code-under-test
+    behavior. Equivalent to patch(..., return_value=...) semantically.
+    """
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "from unittest.mock import patch\n"
+        "\n"
+        "class FakeApi:\n"
+        "    def get(self, p):\n"
+        "        return {'data': []}\n"
+        "\n"
+        "def test_replaces_client():\n"
+        "    with patch('module.ApiClient', FakeApi):\n"
+        "        result = do_something()\n"
+        "    assert result is not None\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
+
+
+def test_test_011_accepts_pytest_raises_as_verification(tmp_path: Path) -> None:
+    """TEST-011: pytest.raises(...) is an exception-shape assertion and
+    counts as verification of the code under test."""
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "import pytest\n"
+        "from unittest.mock import patch\n"
+        "\n"
+        "def test_raises():\n"
+        "    with patch('x.y', side_effect=ValueError), pytest.raises(ValueError):\n"
+        "        do_something()\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
+
+
+def test_test_011_still_flags_bare_patch_without_verification(
+    tmp_path: Path,
+) -> None:
+    """TEST-011: bare patch(target) with no replacement, no assertion,
+    and no mock-API interrogation is still the genuine TEST-011 target.
+    A bare patch returns a MagicMock but the test never asserts on it.
+    """
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "from unittest.mock import patch\n"
+        "\n"
+        "def test_bare():\n"
+        "    with patch('x.y'):\n"
+        "        do_something()\n"
+    )
+    findings = check_mock_assertions(tmp_path)
+    assert len(findings) == 1
+
+
 # --- PIPE-006 -----------------------------------------------------------------
 
 

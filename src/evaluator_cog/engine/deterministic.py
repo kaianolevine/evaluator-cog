@@ -4134,6 +4134,19 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
         re.DOTALL,
     )
 
+    # `patch(target, replacement)` form — 2+ positional args. The second arg
+    # is a fake class, instance, or callable that replaces the target. The
+    # test then asserts on real behavior after injecting the fake.
+    # Matches `patch("foo.bar", FakeClass)` and `patch.object(obj, "method",
+    # fake_fn)` but not bare `patch("foo.bar")` which returns a MagicMock.
+    # We require the second argument to not begin with a `kw=` pattern at the
+    # top level — `ARG, ARG` vs `ARG, kw=ARG`. Simple heuristic: any `,` at
+    # top-level depth followed by something that isn't `\w+\s*=`.
+    _patch_replacement_re = re.compile(
+        r"\bpatch[.\w]*\(\s*[^,)]+,\s*(?!\w+\s*=)[^,)]+[,)]",
+        re.DOTALL,
+    )
+
     # Catch MagicMock(..., side_effect=...) / MagicMock(..., return_value=...)
     # which is the same behavior-injection idiom outside of `patch()`.
     _mock_ctor_behavior_injection_re = re.compile(
@@ -4141,8 +4154,13 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
         re.DOTALL,
     )
 
-    # Any explicit `assert ...` statement (not assertRaises / not assert_xxx).
-    _has_assert_re = re.compile(r"^\s*assert\b", re.MULTILINE)
+    # Any explicit `assert ...` statement (not assertRaises / not assert_xxx),
+    # or a `pytest.raises(...)` / `pytest.warns(...)` call — both of which
+    # are exception-shape assertions on the code under test.
+    _has_assert_re = re.compile(
+        r"^\s*assert\b|\bpytest\.raises\s*\(|\bpytest\.warns\s*\(",
+        re.MULTILINE,
+    )
 
     # Self-reference: test body invokes the function under test.
     _self_reference_re = re.compile(r"\bcheck_mock_assertions\b")
@@ -4161,10 +4179,19 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
         return False
 
     def _is_behavior_injection_with_assertion(body_src: str) -> bool:
-        """Patches with return_value/side_effect are plumbing; any assert counts."""
-        injects = _patch_behavior_injection_re.search(
-            body_src
-        ) or _mock_ctor_behavior_injection_re.search(body_src)
+        """Patches with return_value/side_effect/replacement are plumbing;
+        any assert counts as verification of the real code under test.
+
+        Forms recognised as behavior injection:
+          - ``patch(target, return_value=X)`` / ``patch(target, side_effect=X)``
+          - ``patch(target, FakeClass)`` / ``patch.object(obj, "m", fake_fn)``
+          - ``MagicMock(return_value=X)`` / ``AsyncMock(side_effect=X)``
+        """
+        injects = (
+            _patch_behavior_injection_re.search(body_src)
+            or _patch_replacement_re.search(body_src)
+            or _mock_ctor_behavior_injection_re.search(body_src)
+        )
         if not injects:
             return False
         return bool(_has_assert_re.search(body_src))
@@ -6223,7 +6250,13 @@ def run_all_checks(
 
         _run(_api_001_check, "API-001")
         _run(_api_002_check, "API-002")
-        _run(check_auth_py_docstring, "AUTH-001")
+        # AUTH-001 requires a Python auth.py module. For TypeScript
+        # api-services (Hono) the equivalent lives elsewhere
+        # (e.g. middleware/auth.ts) and is not matched by this check.
+        # The rule itself still applies to TS services — the
+        # deterministic check just doesn't cover that case yet.
+        if language == "python":
+            _run(check_auth_py_docstring, "AUTH-001")
 
     # CD-006 applies to pipeline-cogs, trigger-cogs, and api-services —
     # any repo type where GHA relaying would be a genuine anti-pattern.
