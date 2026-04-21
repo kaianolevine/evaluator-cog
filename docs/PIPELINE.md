@@ -23,7 +23,9 @@ evaluator-cog/
 | --- | --- | --- | --- |
 | `pipeline_eval` | `flow_inline` / `flow_hook` / `prefect_webhook` | Called in-process by other cogs; Prefect Cloud automation webhook | Behavioral — did the run behave correctly? |
 | `conformance` (deterministic) | `conformance_deterministic` | Daily cron via Prefect (`run_llm=False`) | Structural — file/AST/YAML rule checks |
-| `conformance` (LLM) | `conformance_check` | Manual trigger or Prefect automation (`run_llm=True`) | Structural — soft rule assessment by Claude |
+| `conformance` (LLM) | `conformance_llm` | Manual trigger or Prefect automation (`run_llm=True`) | Structural — soft rule assessment by Claude |
+| introspection (EVAL-007) | `standards_drift` | Runs inside every conformance invocation | Catalog vs evaluator drift |
+| introspection (EVAL-003, MONO-003) | `data_quality` | Runs inside every conformance invocation | Quality of stored findings; ecosystem.yaml inventory integrity |
 
 ## Findings destination
 

@@ -74,7 +74,7 @@ def test_post_llm_only_posts_only_llm_findings(monkeypatch) -> None:
     # But only the LLM finding was posted
     assert len(posted) == 1
     assert posted[0]["finding"] == llm_finding["finding"]
-    assert posted[0]["source"] == "conformance_check"
+    assert posted[0]["source"] == "conformance_llm"
 
 
 def test_post_llm_only_false_posts_all_findings(monkeypatch) -> None:
@@ -154,11 +154,17 @@ def test_post_llm_only_empty_llm_posts_status(monkeypatch) -> None:
     assert len(posted) == 1
     assert posted[0]["severity"] == "SUCCESS"
     assert "passed all LLM checks" in posted[0]["finding"]
-    assert posted[0]["source"] == "conformance_check"
+    assert posted[0]["source"] == "conformance_llm"
 
 
-def test_run_llm_false_source_is_conformance_deterministic(monkeypatch) -> None:
-    """Deterministic-only run posts with source='conformance_deterministic'."""
+def test_run_conformance_check_posts_with_conformance_llm_source(monkeypatch) -> None:
+    """run_conformance_check() posts all findings with source='conformance_llm'.
+
+    Note: this helper is used by the LLM path of conformance_check_flow
+    (run_llm=True). The deterministic-only path goes through
+    _run_standalone_deterministic instead, which posts with
+    source='conformance_deterministic'.
+    """
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://test.example.com")
     # No ANTHROPIC_API_KEY set — LLM should be skipped
 
@@ -187,7 +193,7 @@ def test_run_llm_false_source_is_conformance_deterministic(monkeypatch) -> None:
             run_id="deterministic-2.5.1-test",
         )
 
-    assert all(p["source"] == "conformance_check" for p in posted)
+    assert all(p["source"] == "conformance_llm" for p in posted)
 
 
 def _fake_fetch_standards(url: str) -> dict:

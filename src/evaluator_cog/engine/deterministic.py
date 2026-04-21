@@ -5585,17 +5585,30 @@ def check_eval_003(
 ) -> list[Finding]:
     """EVAL-003: Findings emitted by evaluator-cog must be specific and actionable.
 
-    Reads pipeline_evaluations for findings with
-    source='conformance_check' or source='standards_drift' in the last
-    `lookback_days`.
+    Reads pipeline_evaluations for findings emitted by evaluator-cog
+    internal sources in the last `lookback_days`. The historical source
+    name 'conformance_check' is also included so findings stored before
+    the conformance_llm / conformance_deterministic / data_quality split
+    are still covered by the quality check.
     """
     CHECK_ID = "EVAL-003"
     from mini_app_polis.api import KaianoApiClient
 
+    _eval_003_sources = ",".join(
+        [
+            "conformance_llm",
+            "conformance_deterministic",
+            "standards_drift",
+            "data_quality",
+            # Legacy — pre-rename stored rows still present in the DB.
+            "conformance_check",
+        ]
+    )
+
     try:
         api = KaianoApiClient.from_env()
         response = api.get(
-            f"/v1/evaluations?source=conformance_check,standards_drift"
+            f"/v1/evaluations?source={_eval_003_sources}"
             f"&lookback_days={lookback_days}&limit=1000"
         )
     except Exception as exc:
@@ -5964,6 +5977,18 @@ def run_all_checks(
                     )
                 )
             return
+
+        # Guard: never fire a rule whose catalog check_mode is "llm" on the
+        # deterministic path. This used to be possible — any rule registered
+        # here would fire regardless of its intended routing — producing
+        # findings with source="conformance_deterministic" for rules that
+        # should only be assessed by engine/llm.py. The rule is still marked
+        # as "checked" above (so EVAL-007's coverage math is unchanged) but
+        # no check function is invoked here.
+        if evaluator_config is not None and evaluator_config.rule_catalog:
+            meta = evaluator_config.rule_catalog.get(rule_id) or {}
+            if meta.get("check_mode") == "llm":
+                return
 
         if evaluator_config is None:
             # No catalog available → honor explicit legacy exceptions only.

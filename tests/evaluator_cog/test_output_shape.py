@@ -115,7 +115,7 @@ def test_post_payload_contains_all_required_contract_fields(monkeypatch) -> None
             run_id="conformance-3.0.1-test-uuid",
             repo="evaluator-cog",
             flow_name="conformance",
-            source="conformance_check",
+            source="conformance_llm",
             standards_version="3.0.1",
         )
         mock_client.from_env.assert_called_once()
@@ -141,7 +141,7 @@ def test_post_payload_contains_all_required_contract_fields(monkeypatch) -> None
     )
     assert payload["repo"] == "evaluator-cog"
     assert payload["run_id"] == "conformance-3.0.1-test-uuid"
-    assert payload["source"] == "conformance_check"
+    assert payload["source"] == "conformance_llm"
     assert payload["standards_version"] == "3.0.1"
     assert isinstance(payload["finding"], str)
     assert len(payload["finding"]) > 0
@@ -203,7 +203,9 @@ def test_post_payload_source_field_is_preserved(monkeypatch) -> None:
 
     for source_val in (
         "conformance_deterministic",
-        "conformance_check",
+        "conformance_llm",
+        "data_quality",
+        "standards_drift",
         "prefect_webhook",
     ):
         posted.clear()

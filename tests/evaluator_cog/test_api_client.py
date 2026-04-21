@@ -124,7 +124,7 @@ def test_post_findings_skips_empty_finding_text(monkeypatch) -> None:
             run_id="run-skip-test",
             repo="test-repo",
             flow_name=None,
-            source="conformance_check",
+            source="conformance_llm",
             standards_version="3.0.1",
         )
 
@@ -158,7 +158,7 @@ def test_post_findings_normalises_warning_to_warn(monkeypatch) -> None:
             run_id="run-warn-norm",
             repo="test-repo",
             flow_name=None,
-            source="conformance_check",
+            source="conformance_llm",
             standards_version="3.0.1",
         )
 
@@ -325,7 +325,7 @@ def test_post_findings_handles_post_exception_gracefully(monkeypatch) -> None:
             run_id="run-post-fail",
             repo="test-repo",
             flow_name=None,
-            source="conformance_check",
+            source="conformance_llm",
             standards_version="3.0.1",
         )
 

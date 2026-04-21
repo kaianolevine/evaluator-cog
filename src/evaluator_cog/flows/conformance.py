@@ -10,8 +10,13 @@ run_llm=False (default, daily schedule):
 run_llm=True (triggered manually or via Prefect automation, weekly):
   Runs deterministic pass first to get checked_rule_ids, then calls
   the LLM for soft-rule assessment. Posts LLM findings only.
-  Posts findings with source='conformance_check'.
+  Posts findings with source='conformance_llm'.
   run_id prefix: 'conformance-{version}-{uuid}'
+
+Both modes additionally run applies_to-absent checks once per invocation:
+  EVAL-003 and MONO-003 post with source='data_quality' (runtime
+  data-quality on stored findings and on the ecosystem inventory).
+  EVAL-007 posts with source='standards_drift' (catalog vs evaluator).
 """
 
 from __future__ import annotations
@@ -633,7 +638,7 @@ def run_conformance_check(
             run_id=run_id,
             repo=repo_id,
             flow_name="conformance",
-            source="conformance_check",
+            source="conformance_llm",
             standards_version=standards_version,
         )
 
@@ -845,7 +850,7 @@ def _run_applies_to_absent_checks(
         check_mono_003,
     )
 
-    # EVAL-003 — finding quality
+    # EVAL-003 — finding quality (runtime data-quality on stored findings)
     try:
         eval_003_findings = check_eval_003()
         if eval_003_findings:
@@ -854,14 +859,14 @@ def _run_applies_to_absent_checks(
                 run_id=run_id,
                 repo="ecosystem-standards",
                 flow_name="eval-003",
-                source="conformance_check",
+                source="data_quality",
                 standards_version=standards_version,
             )
             prefect_log.info("EVAL-003: posted %d findings", len(eval_003_findings))
     except Exception as exc:
         prefect_log.warning("EVAL-003: check failed: %s", exc)
 
-    # MONO-003 — monorepo dedup
+    # MONO-003 — monorepo dedup integrity of ecosystem.yaml inventory
     try:
         mono_003_findings = check_mono_003(ecosystem=ecosystem)
         if mono_003_findings:
@@ -870,7 +875,7 @@ def _run_applies_to_absent_checks(
                 run_id=run_id,
                 repo="ecosystem-standards",
                 flow_name="mono-003",
-                source="standards_drift",
+                source="data_quality",
                 standards_version=standards_version,
             )
             prefect_log.info("MONO-003: posted %d findings", len(mono_003_findings))
@@ -908,7 +913,12 @@ def conformance_check_flow(run_llm: bool = False) -> None:
 
     When run_llm=True: deterministic pass first (for checked_rule_ids),
     then LLM soft-rule assessment. Posts LLM findings only with
-    source='conformance_check'. Triggered manually or via Prefect automation.
+    source='conformance_llm'. Triggered manually or via Prefect automation.
+
+    In both modes, applies_to-absent introspection checks also run once
+    per invocation:
+      EVAL-003, MONO-003 → source='data_quality'
+      EVAL-007           → source='standards_drift'
     """
     try:
         prefect_log = get_run_logger()
