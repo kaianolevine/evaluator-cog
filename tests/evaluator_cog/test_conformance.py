@@ -280,6 +280,127 @@ def test_fetch_standards_rejects_invalid_rule_status() -> None:
         _fetch_standards_for_service(service, cfg)
 
 
+def test_fetch_catalog_schema_parses_v4_shape() -> None:
+    """_fetch_catalog_schema returns traits with structured exempts/downgrades,
+    repo_types set, and statuses set from index.yaml."""
+    fake_index = {
+        "statuses": {
+            "requirement": {"description": "must comply"},
+            "convention": {"description": "should comply"},
+            "gap": {"description": "tracked deficiency"},
+        },
+        "schema": {
+            "repo_types": {
+                "pipeline-cog": "desc",
+                "api-service": "desc",
+            },
+            "traits": {
+                "logger-primitive": {
+                    "description": "is the logger",
+                    "exempts": ["CD-009"],
+                },
+                "multi-flow": {
+                    "description": "multi-flow",
+                    "downgrades": [
+                        {"rule": "CD-015", "to": "INFO", "reason": "scanner limit"},
+                    ],
+                },
+            },
+        },
+    }
+    from evaluator_cog.flows.conformance import _fetch_catalog_schema
+
+    with patch(
+        "evaluator_cog.flows.conformance._fetch_yaml",
+        return_value=fake_index,
+    ):
+        schema = _fetch_catalog_schema()
+
+    assert schema["statuses"] == {"requirement", "convention", "gap"}
+    assert schema["repo_types"] == {"pipeline-cog", "api-service"}
+    assert "logger-primitive" in schema["traits"]
+    assert schema["traits"]["logger-primitive"]["exempts"] == ["CD-009"]
+    assert schema["traits"]["logger-primitive"]["downgrades"] == []
+    assert schema["traits"]["multi-flow"]["exempts"] == []
+    assert schema["traits"]["multi-flow"]["downgrades"] == [
+        {"rule": "CD-015", "to": "INFO", "reason": "scanner limit"},
+    ]
+
+
+def test_fetch_catalog_schema_returns_empty_on_fetch_failure() -> None:
+    """When _fetch_yaml returns {}, _fetch_catalog_schema returns a dict
+    with empty traits/repo_types/statuses rather than raising."""
+    from evaluator_cog.flows.conformance import _fetch_catalog_schema
+
+    with patch(
+        "evaluator_cog.flows.conformance._fetch_yaml",
+        return_value={},
+    ):
+        schema = _fetch_catalog_schema()
+
+    assert schema["traits"] == {}
+    assert schema["repo_types"] == set()
+    assert schema["statuses"] == set()
+
+
+def test_fetch_full_rule_catalog_captures_applies_to_and_modifies() -> None:
+    """_fetch_full_rule_catalog returns per-rule applies_to, modifies, status.
+    Rules omitting applies_to have it stored as None."""
+
+    def _fake_fetch(url: str) -> dict:
+        if url.endswith("/index.yaml"):
+            return {
+                "files": [
+                    {"file": "standards/monorepo.yaml", "domain": "monorepo"},
+                    {"file": "standards/evaluation.yaml", "domain": "evaluation"},
+                ],
+            }
+        if url.endswith("/monorepo.yaml"):
+            return {
+                "standards": [
+                    {
+                        "id": "MONO-001",
+                        "checkable": True,
+                        "applies_to": ["api-service", "react-app"],
+                        "modifies": ["XSTACK-001"],
+                        "status": "requirement",
+                    },
+                    {
+                        "id": "MONO-003",
+                        "checkable": True,
+                        "status": "requirement",
+                        # no applies_to
+                    },
+                ]
+            }
+        if url.endswith("/evaluation.yaml"):
+            return {
+                "standards": [
+                    {
+                        "id": "EVAL-003",
+                        "checkable": True,
+                        "status": "requirement",
+                        # no applies_to
+                    },
+                ]
+            }
+        return {"standards": []}
+
+    from evaluator_cog.flows.conformance import _fetch_full_rule_catalog
+
+    with patch(
+        "evaluator_cog.flows.conformance._fetch_yaml",
+        side_effect=_fake_fetch,
+    ):
+        catalog = _fetch_full_rule_catalog()
+
+    assert catalog["MONO-001"]["applies_to"] == ["api-service", "react-app"]
+    assert catalog["MONO-001"]["modifies"] == ["XSTACK-001"]
+    assert catalog["MONO-003"]["applies_to"] is None
+    assert catalog["MONO-003"]["modifies"] == []
+    assert catalog["EVAL-003"]["applies_to"] is None
+
+
 def test_run_standalone_deterministic_calls_load_evaluator_config(
     tmp_path: Path,
 ) -> None:
@@ -324,6 +445,8 @@ def test_run_standalone_deterministic_calls_load_evaluator_config(
         monorepo_root=None,
         workspace_package_json_text=None,
         evaluator_config=cfg,
+        rule_catalog=None,
+        catalog_schema=None,
     )
     # run_all_checks returns empty findings, so _run_standalone_deterministic
     # substitutes a STATUS SUCCESS finding before posting.

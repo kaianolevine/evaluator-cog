@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import re
+import re as _re_eval003
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -5056,6 +5057,259 @@ def _type_to_dod(repo_type: str, language: str = "python") -> str | None:
     return mapping.get(repo_type)
 
 
+def check_eval_003(
+    *,
+    lookback_days: int = 30,
+) -> list[Finding]:
+    """EVAL-003: Findings emitted by evaluator-cog must be specific and actionable.
+
+    Reads pipeline_evaluations for findings with
+    source='conformance_check' or source='standards_drift' in the last
+    `lookback_days`.
+    """
+    CHECK_ID = "EVAL-003"
+    from mini_app_polis.api import KaianoApiClient
+
+    try:
+        api = KaianoApiClient.from_env()
+        response = api.get(
+            f"/v1/evaluations?source=conformance_check,standards_drift"
+            f"&lookback_days={lookback_days}&limit=1000"
+        )
+    except Exception as exc:
+        return [
+            _finding(
+                "CHECKER",
+                "WARN",
+                "pipeline_consistency",
+                f"EVAL-003: could not fetch pipeline_evaluations: {exc}",
+                "Investigate api-kaianolevine-com connectivity.",
+            )
+        ]
+
+    if isinstance(response, dict):
+        rows = response.get("data") or response.get("items") or []
+    elif isinstance(response, list):
+        rows = response
+    else:
+        rows = []
+
+    findings: list[Finding] = []
+    rule_id_pattern = _re_eval003.compile(r"[A-Z]+-\d+")
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("finding") or "").strip()
+        remediation = str(row.get("suggestion") or row.get("remediation") or "").strip()
+        row_id = row.get("id") or row.get("run_id")
+
+        problems: list[str] = []
+        if not rule_id_pattern.search(text):
+            problems.append("no rule ID reference in finding_text")
+        if len(text) <= 60:
+            problems.append(f"finding_text too short ({len(text)} chars)")
+        if not remediation:
+            problems.append("empty remediation")
+        elif len(remediation) < max(len(text) * 0.5, 40):
+            problems.append(
+                f"remediation too short ({len(remediation)} chars) "
+                f"vs finding ({len(text)} chars)"
+            )
+
+        if problems:
+            findings.append(
+                _finding(
+                    CHECK_ID,
+                    "WARN",
+                    "pipeline_consistency",
+                    f"Finding {row_id} violates EVAL-003: "
+                    + "; ".join(problems)
+                    + f". finding={text[:80]!r}",
+                    "Rewrite the finding to reference a rule ID, "
+                    "expand past 60 chars, and include concrete remediation guidance.",
+                )
+            )
+
+    return findings
+
+
+def check_mono_003(
+    *,
+    ecosystem: dict | None = None,
+    lookback_days: int = 30,
+) -> list[Finding]:
+    """MONO-003: Sibling findings with same root cause must be deduplicated."""
+    CHECK_ID = "MONO-003"
+    from collections import defaultdict
+
+    from mini_app_polis.api import KaianoApiClient
+
+    if ecosystem is None:
+        return []
+    monorepo_services: dict[str, str] = {}
+    for svc in ecosystem.get("services", []) or []:
+        if not isinstance(svc, dict):
+            continue
+        mono = svc.get("monorepo")
+        sid = svc.get("id")
+        if mono and sid:
+            monorepo_services[str(sid)] = str(mono)
+
+    if not monorepo_services:
+        return []
+
+    _PER_APP_EXPECTED = frozenset({"XSTACK-002"})
+
+    try:
+        api = KaianoApiClient.from_env()
+        service_ids = ",".join(monorepo_services.keys())
+        response = api.get(
+            f"/v1/evaluations?repos={service_ids}&lookback_days={lookback_days}&limit=2000"
+        )
+    except Exception as exc:
+        return [
+            _finding(
+                "CHECKER",
+                "WARN",
+                "monorepo_coherence",
+                f"MONO-003: could not fetch pipeline_evaluations: {exc}",
+                "Investigate api-kaianolevine-com connectivity.",
+            )
+        ]
+
+    if isinstance(response, dict):
+        rows = response.get("data") or response.get("items") or []
+    elif isinstance(response, list):
+        rows = response
+    else:
+        rows = []
+
+    buckets: dict[str, dict[tuple, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        repo = str(row.get("repo") or "")
+        mono = monorepo_services.get(repo)
+        if not mono:
+            continue
+        rule_id = str(row.get("rule_id") or row.get("violation_id") or "")
+        if rule_id in _PER_APP_EXPECTED:
+            continue
+        key = (
+            rule_id,
+            str(row.get("finding") or ""),
+            str(row.get("standards_version") or ""),
+            str(row.get("run_id") or ""),
+        )
+        buckets[mono][key].append(row)
+
+    findings: list[Finding] = []
+    for mono_id, groups in buckets.items():
+        for key, group in groups.items():
+            if len(group) <= 1:
+                continue
+            rule_id, _text, _version, _run_id = key
+            affected = sorted({str(r.get("repo") or "") for r in group})
+            findings.append(
+                _finding(
+                    CHECK_ID,
+                    "WARN",
+                    "monorepo_coherence",
+                    f"Monorepo '{mono_id}' emitted {len(group)} duplicate "
+                    f"findings for rule {rule_id} across sibling apps "
+                    f"({', '.join(affected)}). Expected one collapsed "
+                    f"finding tagged with all affected service IDs.",
+                    f"Verify MONO-001 / MONO-002 dedup logic is invoked "
+                    f"for rule {rule_id} on this monorepo.",
+                )
+            )
+
+    return findings
+
+
+def check_eval_007(
+    *,
+    rule_catalog: dict[str, dict] | None = None,
+    current_standards_version: str = "",
+    evaluator_standards_version: str = "",
+) -> list[Finding]:
+    """EVAL-007: Standards/evaluator check coverage must be tracked and in sync."""
+    CHECK_ID = "EVAL-007"
+    if not rule_catalog:
+        return []
+
+    findings: list[Finding] = []
+
+    import inspect
+
+    this_module_src = inspect.getsource(inspect.getmodule(check_eval_007))
+    impl_ids: set[str] = set(
+        re.findall(r'CHECK_ID\s*=\s*"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"', this_module_src)
+    )
+
+    checkable_ids = set(rule_catalog.keys())
+
+    unimplemented = sorted(checkable_ids - impl_ids)
+    orphaned = sorted(impl_ids - checkable_ids)
+
+    for rid in unimplemented:
+        findings.append(
+            _finding(
+                CHECK_ID,
+                "WARN",
+                "standards_currency",
+                f"Rule {rid} is checkable in the catalog but has no "
+                f"CHECK_ID constant in evaluator-cog's deterministic.py.",
+                f"Add a check function for {rid} and register its CHECK_ID.",
+            )
+        )
+
+    for rid in orphaned:
+        findings.append(
+            _finding(
+                CHECK_ID,
+                "ERROR",
+                "standards_currency",
+                f"CHECK_ID {rid} is implemented in evaluator-cog but has "
+                f"no matching rule in the catalog (orphaned check).",
+                "Remove the implementation or restore the rule in ecosystem-standards.",
+            )
+        )
+
+    if current_standards_version and evaluator_standards_version:
+        try:
+            cur_parts = [int(p) for p in current_standards_version.split(".")[:2]]
+            ev_parts = [int(p) for p in evaluator_standards_version.split(".")[:2]]
+            if cur_parts[0] > ev_parts[0]:
+                findings.append(
+                    _finding(
+                        CHECK_ID,
+                        "WARN",
+                        "standards_currency",
+                        f"Evaluator pinned to standards v{evaluator_standards_version}, "
+                        f"catalog is at v{current_standards_version} — major version skew.",
+                        "Rebuild/redeploy evaluator-cog against the current catalog.",
+                    )
+                )
+            elif cur_parts[0] == ev_parts[0] and (cur_parts[1] - ev_parts[1]) > 1:
+                findings.append(
+                    _finding(
+                        CHECK_ID,
+                        "WARN",
+                        "standards_currency",
+                        f"Evaluator pinned to standards v{evaluator_standards_version}, "
+                        f"catalog is at v{current_standards_version} — "
+                        f">1 minor version behind.",
+                        "Rebuild/redeploy evaluator-cog against the current catalog.",
+                    )
+                )
+        except (ValueError, IndexError):
+            pass
+
+    return findings
+
+
 # -- Runner -------------------------------------------------------------------
 
 
@@ -5070,6 +5324,8 @@ def run_all_checks(
     monorepo_root: Path | None = None,
     workspace_package_json_text: str | None = None,
     evaluator_config: EvaluatorConfig | None = None,
+    rule_catalog: dict[str, dict] | None = None,
+    catalog_schema: dict | None = None,
 ) -> CheckResult:
     """Run deterministic checks against a repo and return combined findings.
 
@@ -5080,6 +5336,10 @@ def run_all_checks(
     # ── Resolve type-based flags ─────────────────────────────────────────────
     # Prefer evaluator_config (from evaluator.yaml) over legacy dod_type fields.
     if evaluator_config is not None:
+        if rule_catalog is not None:
+            evaluator_config.rule_catalog = rule_catalog
+        if catalog_schema is not None:
+            evaluator_config.catalog_schema = catalog_schema
         cfg = evaluator_config
         # Type says "could be Python" (e.g. shared-library); ecosystem language is authoritative.
         is_python = (language == "python") and cfg.is_python_service
@@ -5090,14 +5350,6 @@ def run_all_checks(
         # FastAPI (Python) and Hono (TypeScript) API services.
         is_api_service = cfg.is_api_service
         is_frontend = cfg.is_frontend
-        _exceptions = cfg.all_skipped_ids
-        _exception_reasons = {**cfg.exemption_reasons}
-        # Add deferral reasons with a deferral marker prefix for finding output
-        for rule_id, reason in cfg.deferral_reasons.items():
-            if rule_id not in _exception_reasons:
-                _exception_reasons[rule_id] = f"[DEFERRED] {reason}"
-        # Deferrals: still run the check but mark findings as deferred
-        _deferred_ids = frozenset(cfg.deferral_ids)
     else:
         # Legacy path — used during migration when evaluator.yaml is absent
         is_python = language == "python" or dod_type in (
@@ -5111,9 +5363,14 @@ def run_all_checks(
         is_fastapi = dod_type == "new_fastapi_service"
         is_api_service = dod_type in ("new_fastapi_service", "new_hono_service")
         is_frontend = dod_type in ("new_frontend_site", "new_react_app")
-        _exceptions = frozenset(check_exceptions or [])
-        _exception_reasons = exception_reasons or {}
-        _deferred_ids: frozenset[str] = frozenset()
+
+    # Legacy skip list is still used by a handful of checker functions that
+    # accept "exceptions" lists directly.
+    _exceptions = (
+        evaluator_config.all_skipped_ids
+        if evaluator_config is not None
+        else frozenset(check_exceptions or [])
+    )
 
     # Also handle cog_subtype trigger for trigger-cog type
     is_trigger_cog = (
@@ -5128,26 +5385,80 @@ def run_all_checks(
     def _run(check_fn, rule_id: str | None = None) -> None:
         if rule_id:
             checked_rule_ids.add(rule_id)
-        if rule_id and rule_id in _exceptions:
-            reason = _exception_reasons.get(rule_id, "")
-            if reason:
+        if not rule_id:
+            # Legacy call without a rule_id: just run and collect.
+            try:
+                findings.extend(check_fn(repo_path))
+            except Exception as exc:
                 findings.append(
                     _finding(
-                        rule_id,
-                        "INFO",
+                        "CHECKER",
+                        "WARN",
                         "structural_conformance",
-                        f"Skipped: {reason}",
-                        "",
+                        f"Check {check_fn.__name__} raised an unexpected error: {exc}",
+                        "Investigate the checker itself.",
                     )
                 )
             return
+
+        if evaluator_config is None:
+            # No catalog available → honor explicit legacy exceptions only.
+            if rule_id in _exceptions:
+                reason = (exception_reasons or {}).get(rule_id, "")
+                if reason:
+                    findings.append(
+                        _finding(
+                            rule_id,
+                            "INFO",
+                            "structural_conformance",
+                            f"Skipped: {reason}",
+                            "",
+                        )
+                    )
+                return
+            disposition_info_reason = ""
+            severity_override: str | None = None
+            is_deferred = False
+            rule_status = ""
+        else:
+            result = evaluator_config.resolve_dispatch(rule_id)
+            rule_meta = (evaluator_config.rule_catalog or {}).get(rule_id, {})
+            rule_status = rule_meta.get("status", "")
+            if not result.should_run:
+                if result.emits_skip_finding and result.reason:
+                    f = _finding(
+                        rule_id,
+                        "INFO",
+                        "structural_conformance",
+                        f"Skipped: {result.reason}",
+                        "",
+                    )
+                    f["status"] = rule_status
+                    findings.append(f)
+                return
+            disposition_info_reason = result.reason
+            severity_override = (
+                result.downgraded_severity
+                if result.disposition.value == "run_downgraded"
+                else None
+            )
+            is_deferred = result.disposition.value == "run_deferred"
+
         try:
             new_findings = check_fn(repo_path)
-            # If rule is deferred, downgrade severity to INFO
-            if rule_id and rule_id in _deferred_ids:
-                for f in new_findings:
+            for f in new_findings:
+                if is_deferred:
                     f["severity"] = "INFO"
                     f["deferred"] = True
+                    if disposition_info_reason and "deferred_reason" not in f:
+                        f["deferred_reason"] = disposition_info_reason
+                elif severity_override:
+                    f["severity"] = severity_override
+                    f["downgraded"] = True
+                    if disposition_info_reason and "downgrade_reason" not in f:
+                        f["downgrade_reason"] = disposition_info_reason
+                if rule_status and "status" not in f:
+                    f["status"] = rule_status
             findings.extend(new_findings)
         except Exception as exc:
             findings.append(
@@ -5208,7 +5519,10 @@ def run_all_checks(
     _run(check_no_manual_changelog, "VER-004")
 
     _mark_checked("XSTACK-001")
-    if "XSTACK-001" not in _exceptions:
+    if (evaluator_config is None and "XSTACK-001" not in _exceptions) or (
+        evaluator_config is not None
+        and evaluator_config.resolve_dispatch("XSTACK-001").should_run
+    ):
         # Static sites are excluded from XSTACK-001 by type scoping
         if not is_frontend or (
             evaluator_config is not None and not evaluator_config.is_static_site
@@ -5221,17 +5535,36 @@ def run_all_checks(
                 )
             )
     else:
-        reason = _exception_reasons.get("XSTACK-001", "")
-        if reason:
-            findings.append(
-                _finding(
+        if evaluator_config is None:
+            reason = (exception_reasons or {}).get("XSTACK-001", "")
+            if reason:
+                findings.append(
+                    _finding(
+                        "XSTACK-001",
+                        "INFO",
+                        "structural_conformance",
+                        f"Skipped: {reason}",
+                        "",
+                    )
+                )
+        else:
+            dispatch = evaluator_config.resolve_dispatch("XSTACK-001")
+            if dispatch.emits_skip_finding and dispatch.reason:
+                rule_status = (
+                    (evaluator_config.rule_catalog or {})
+                    .get("XSTACK-001", {})
+                    .get("status", "")
+                )
+                skip_finding = _finding(
                     "XSTACK-001",
                     "INFO",
                     "structural_conformance",
-                    f"Skipped: {reason}",
+                    f"Skipped: {dispatch.reason}",
                     "",
                 )
-            )
+                if rule_status:
+                    skip_finding["status"] = rule_status
+                findings.append(skip_finding)
 
     # Standards freshness check only applies to standards-repo type
     if evaluator_config is not None:
@@ -5274,7 +5607,10 @@ def run_all_checks(
         _run(check_pytest_config, "TEST-005")
 
     # DOC-013 README running locally — use new type for dod_type hint
-    if "DOC-013" not in _exceptions:
+    if (
+        evaluator_config is None
+        or evaluator_config.resolve_dispatch("DOC-013").should_run
+    ):
         _mark_checked("DOC-013")
         # Map type to dod_type string for check_readme_running_locally
         if evaluator_config is not None:
@@ -5553,6 +5889,18 @@ def run_all_checks(
                 "Add evaluator.yaml declaring type, traits, exemptions, and deferrals.",
             )
         )
+
+    if evaluator_config is not None:
+        catalog = evaluator_config.rule_catalog or {}
+        for finding in findings:
+            if "status" in finding:
+                continue
+            rid = str(finding.get("rule_id") or "")
+            if not rid:
+                continue
+            rule_status = str((catalog.get(rid) or {}).get("status") or "").strip()
+            if rule_status:
+                finding["status"] = rule_status
 
     findings = _deduplicate_same_repo_findings(findings)
     return CheckResult(findings=findings, checked_rule_ids=checked_rule_ids)

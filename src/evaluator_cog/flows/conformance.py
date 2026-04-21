@@ -214,20 +214,84 @@ def _resolve_standards_domains() -> list[str]:
     return live_domains
 
 
-def _fetch_full_rule_catalog() -> dict[str, list[str]]:
-    """Fetch every checkable rule's applies_to list from every standards
-    file. Returns a {rule_id: applies_to_list} dict covering the entire
-    catalog, type-agnostic.
+def _fetch_catalog_schema() -> dict:
+    """Fetch structured schema data from index.yaml.
 
-    Used by load_evaluator_config to derive type-based auto-exceptions
-    from the live catalog rather than a hardcoded table.
+    Returns a dict with three keys:
+      - traits: {trait_name: {"exempts": [...], "downgrades": [...],
+                 "description": "..."}}
+                Sourced from index.yaml schema.traits.
+      - repo_types: set of valid repo type names.
+                    Sourced from index.yaml schema.repo_types (keys).
+      - statuses: set of valid rule status values.
+                  Sourced from index.yaml statuses (keys).
 
-    Never raises. Returns {} on fetch failure — callers should treat an
-    empty result as "no catalog available" and fall back to trait-only
-    skip logic. _fetch_yaml already logs warnings on per-file failure.
+    Never raises. Returns partial data on fetch or parse failure — the
+    caller must handle missing keys. _fetch_yaml already logs a warning
+    on transport failure.
+    """
+    index = _fetch_yaml(_ECOSYSTEM_STANDARDS_INDEX_URL)
+    schema = (index.get("schema") or {}) if isinstance(index, dict) else {}
+
+    raw_traits = schema.get("traits") or {}
+    traits: dict[str, dict] = {}
+    if isinstance(raw_traits, dict):
+        for name, body in raw_traits.items():
+            if not isinstance(body, dict):
+                continue
+            traits[str(name)] = {
+                "description": str(body.get("description") or "").strip(),
+                "exempts": [
+                    str(r) for r in (body.get("exempts") or []) if isinstance(r, str)
+                ],
+                "downgrades": [
+                    {
+                        "rule": str(d.get("rule") or "").strip(),
+                        "to": str(d.get("to") or "").strip().upper(),
+                        "reason": str(d.get("reason") or "").strip(),
+                    }
+                    for d in (body.get("downgrades") or [])
+                    if isinstance(d, dict)
+                ],
+            }
+
+    raw_repo_types = schema.get("repo_types") or {}
+    repo_types: set[str] = set()
+    if isinstance(raw_repo_types, dict):
+        repo_types = {str(k) for k in raw_repo_types}
+
+    raw_statuses = index.get("statuses") or {} if isinstance(index, dict) else {}
+    statuses: set[str] = set()
+    if isinstance(raw_statuses, dict):
+        statuses = {str(k) for k in raw_statuses}
+
+    return {
+        "traits": traits,
+        "repo_types": repo_types,
+        "statuses": statuses,
+    }
+
+
+def _fetch_full_rule_catalog() -> dict[str, dict]:
+    """Fetch every checkable rule's metadata from every standards file.
+
+    Returns {rule_id: {"applies_to": list[str] | None, "modifies": list[str],
+                       "status": str}} covering the entire catalog.
+
+    `applies_to` is None when the rule omits the field entirely (v4.0.0
+    semantics: the rule is not a repo-source scan — see ADR-004). An
+    explicit empty list `[]` is also treated as None for dispatch
+    purposes, though the catalog does not currently contain any such
+    rules.
+
+    Used by PR 3's dispatch to derive type-based scope from the live
+    catalog rather than a hardcoded table. Used by PR 4 for modifier
+    resolution.
+
+    Never raises. Returns {} on full-catalog fetch failure.
     """
     domains = _resolve_standards_domains()
-    catalog: dict[str, list[str]] = {}
+    catalog: dict[str, dict] = {}
     for domain in domains:
         url = f"{_STANDARDS_BASE_URL}/{domain}.yaml"
         data = _fetch_yaml(url)
@@ -235,9 +299,29 @@ def _fetch_full_rule_catalog() -> dict[str, list[str]]:
             if not rule.get("checkable"):
                 continue
             rule_id = str(rule.get("id") or "").strip()
-            applies = rule.get("applies_to") or []
-            if rule_id and isinstance(applies, list):
-                catalog[rule_id] = [str(x) for x in applies]
+            if not rule_id:
+                continue
+            raw_applies = rule.get("applies_to")
+            applies_to: list[str] | None
+            if raw_applies is None:
+                applies_to = None  # ADR-004: non-repo-scan rule
+            elif isinstance(raw_applies, list):
+                applies_to = [str(x) for x in raw_applies]
+            else:
+                applies_to = None
+            if applies_to == []:
+                applies_to = None
+            raw_modifies = rule.get("modifies") or []
+            modifies = (
+                [str(x) for x in raw_modifies if isinstance(x, str)]
+                if isinstance(raw_modifies, list)
+                else []
+            )
+            catalog[rule_id] = {
+                "applies_to": applies_to,
+                "modifies": modifies,
+                "status": str(rule.get("status") or "").strip(),
+            }
     return catalog
 
 
@@ -437,6 +521,8 @@ def run_conformance_check(
     post_llm_only: bool = False,
     evaluator_config: EvaluatorConfig | None = None,
     rule_applies_to: dict[str, list[str]] | None = None,
+    rule_catalog: dict[str, dict] | None = None,
+    catalog_schema: dict | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run deterministic + LLM conformance checks against a cloned repo.
@@ -462,6 +548,8 @@ def run_conformance_check(
             monorepo_root=monorepo_root,
             workspace_package_json_text=workspace_package_json_text,
             evaluator_config=evaluator_config,
+            rule_catalog=rule_catalog,
+            catalog_schema=catalog_schema,
         )
         deterministic_findings = result.findings
         checked_rule_ids = result.checked_rule_ids
@@ -551,6 +639,8 @@ def _run_standalone_conformance(
     run_id: str,
     prefect_log: Any,
     rule_applies_to: dict[str, list[str]] | None = None,
+    rule_catalog: dict[str, dict] | None = None,
+    catalog_schema: dict | None = None,
 ) -> None:
     """Run full conformance for a single cloned service (posts immediately)."""
     repo_id = service.get("id", "")
@@ -570,7 +660,8 @@ def _run_standalone_conformance(
         fallback_type=service.get("type") or dod_type,
         fallback_exceptions=check_exceptions,
         fallback_exception_reasons=exception_reasons,
-        rule_applies_to=rule_applies_to,
+        rule_catalog=rule_catalog,
+        catalog_schema=catalog_schema,
     )
 
     standards_rules = _fetch_standards_for_service(service, evaluator_cfg)
@@ -591,6 +682,8 @@ def _run_standalone_conformance(
             post_llm_only=True,
             evaluator_config=evaluator_cfg,
             rule_applies_to=rule_applies_to,
+            rule_catalog=rule_catalog,
+            catalog_schema=catalog_schema,
         )
         _ = all_findings
         prefect_log.info(
@@ -643,6 +736,8 @@ def _run_standalone_deterministic(
     monorepo_root: Path | None = None,
     workspace_package_json_text: str | None = None,
     rule_applies_to: dict[str, list[str]] | None = None,
+    rule_catalog: dict[str, dict] | None = None,
+    catalog_schema: dict | None = None,
 ) -> None:
     """Run deterministic-only checks for a single service and post immediately."""
     repo_id = service.get("id", "")
@@ -664,7 +759,8 @@ def _run_standalone_deterministic(
         fallback_type=service.get("type") or dod_type,
         fallback_exceptions=check_exceptions,
         fallback_exception_reasons=exception_reasons,
-        rule_applies_to=rule_applies_to,
+        rule_catalog=rule_catalog,
+        catalog_schema=catalog_schema,
     )
     # For monorepo apps the evaluator.yaml may live at the app path
     if monorepo_root and not (check_root / "evaluator.yaml").exists():
@@ -673,7 +769,8 @@ def _run_standalone_deterministic(
             fallback_type=service.get("type") or dod_type,
             fallback_exceptions=check_exceptions,
             fallback_exception_reasons=exception_reasons,
-            rule_applies_to=rule_applies_to,
+            rule_catalog=rule_catalog,
+            catalog_schema=catalog_schema,
         )
 
     prefect_log.info(
@@ -692,6 +789,8 @@ def _run_standalone_deterministic(
             monorepo_root=monorepo_root,
             workspace_package_json_text=workspace_package_json_text,
             evaluator_config=evaluator_cfg,
+            rule_catalog=rule_catalog,
+            catalog_schema=catalog_schema,
         )
         findings = result.findings
         prefect_log.info("deterministic: %d findings for %s", len(findings), repo_id)
@@ -722,6 +821,75 @@ def _run_standalone_deterministic(
     )
 
 
+def _run_applies_to_absent_checks(
+    *,
+    ecosystem: dict,
+    rule_catalog: dict[str, dict],
+    standards_version: str,
+    evaluator_standards_version: str,
+    run_id: str,
+    prefect_log: Any,
+) -> None:
+    """Run applies_to-absent checks once per flow invocation."""
+    from evaluator_cog.engine.deterministic import (
+        check_eval_003,
+        check_eval_007,
+        check_mono_003,
+    )
+
+    # EVAL-003 — finding quality
+    try:
+        eval_003_findings = check_eval_003()
+        if eval_003_findings:
+            post_findings(
+                findings=eval_003_findings,
+                run_id=run_id,
+                repo="ecosystem-standards",
+                flow_name="eval-003",
+                source="conformance_check",
+                standards_version=standards_version,
+            )
+            prefect_log.info("EVAL-003: posted %d findings", len(eval_003_findings))
+    except Exception as exc:
+        prefect_log.warning("EVAL-003: check failed: %s", exc)
+
+    # MONO-003 — monorepo dedup
+    try:
+        mono_003_findings = check_mono_003(ecosystem=ecosystem)
+        if mono_003_findings:
+            post_findings(
+                findings=mono_003_findings,
+                run_id=run_id,
+                repo="ecosystem-standards",
+                flow_name="mono-003",
+                source="standards_drift",
+                standards_version=standards_version,
+            )
+            prefect_log.info("MONO-003: posted %d findings", len(mono_003_findings))
+    except Exception as exc:
+        prefect_log.warning("MONO-003: check failed: %s", exc)
+
+    # EVAL-007 — standards/evaluator drift
+    try:
+        eval_007_findings = check_eval_007(
+            rule_catalog=rule_catalog,
+            current_standards_version=standards_version,
+            evaluator_standards_version=evaluator_standards_version,
+        )
+        if eval_007_findings:
+            post_findings(
+                findings=eval_007_findings,
+                run_id=run_id,
+                repo="ecosystem-standards",
+                flow_name="eval-007",
+                source="standards_drift",
+                standards_version=standards_version,
+            )
+            prefect_log.info("EVAL-007: posted %d findings", len(eval_007_findings))
+    except Exception as exc:
+        prefect_log.warning("EVAL-007: check failed: %s", exc)
+
+
 @flow(name="conformance-check", log_prints=True, on_completion=[_on_completion])
 def conformance_check_flow(run_llm: bool = False) -> None:
     """
@@ -744,8 +912,22 @@ def conformance_check_flow(run_llm: bool = False) -> None:
 
     standards_version = _get_standards_version()
     prefect_log.info("%s: standards version %s", flow_label, standards_version)
-    rule_applies_to = _fetch_full_rule_catalog()
-    if not rule_applies_to:
+    catalog_schema = _fetch_catalog_schema()
+    rule_catalog = _fetch_full_rule_catalog()
+    prefect_log.info(
+        "%s: loaded %d traits, %d repo types, %d rules from catalog",
+        flow_label,
+        len(catalog_schema.get("traits", {})),
+        len(catalog_schema.get("repo_types", set())),
+        len(rule_catalog),
+    )
+
+    rule_applies_to = {
+        rule_id: meta["applies_to"]
+        for rule_id, meta in rule_catalog.items()
+        if isinstance(meta, dict) and isinstance(meta.get("applies_to"), list)
+    }
+    if not rule_catalog:
         prefect_log.warning(
             "%s: full rule catalog empty — type-based auto-exceptions "
             "disabled for this run",
@@ -812,6 +994,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                             run_id,
                             prefect_log,
                             rule_applies_to=rule_applies_to,
+                            rule_catalog=rule_catalog,
+                            catalog_schema=catalog_schema,
                         )
                     else:
                         _run_standalone_deterministic(
@@ -821,6 +1005,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                             run_id,
                             prefect_log,
                             rule_applies_to=rule_applies_to,
+                            rule_catalog=rule_catalog,
+                            catalog_schema=catalog_schema,
                         )
                 except Exception as exc:
                     prefect_log.error(
@@ -859,6 +1045,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     run_id,
                                     prefect_log,
                                     rule_applies_to=rule_applies_to,
+                                    rule_catalog=rule_catalog,
+                                    catalog_schema=catalog_schema,
                                 )
                             else:
                                 _run_standalone_deterministic(
@@ -868,6 +1056,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     run_id,
                                     prefect_log,
                                     rule_applies_to=rule_applies_to,
+                                    rule_catalog=rule_catalog,
+                                    catalog_schema=catalog_schema,
                                 )
                         except Exception as exc:
                             prefect_log.error(
@@ -972,7 +1162,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     fallback_type=service.get("type") or dod_type,
                                     fallback_exceptions=check_exceptions,
                                     fallback_exception_reasons=exception_reasons,
-                                    rule_applies_to=rule_applies_to,
+                                    rule_catalog=rule_catalog,
+                                    catalog_schema=catalog_schema,
                                 )
                                 if (
                                     monorepo_root
@@ -983,7 +1174,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                         fallback_type=service.get("type") or dod_type,
                                         fallback_exceptions=check_exceptions,
                                         fallback_exception_reasons=exception_reasons,
-                                        rule_applies_to=rule_applies_to,
+                                        rule_catalog=rule_catalog,
+                                        catalog_schema=catalog_schema,
                                     )
                                 run_conformance_check(
                                     repo_id=repo_id,
@@ -1004,6 +1196,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     post_llm_only=True,
                                     evaluator_config=_evaluator_cfg,
                                     rule_applies_to=rule_applies_to,
+                                    rule_catalog=rule_catalog,
+                                    catalog_schema=catalog_schema,
                                 )
                                 prefect_log.info(
                                     "conformance: posted LLM findings for monorepo app %s",
@@ -1023,7 +1217,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     fallback_type=service.get("type") or dod_type,
                                     fallback_exceptions=check_exceptions,
                                     fallback_exception_reasons=exception_reasons,
-                                    rule_applies_to=rule_applies_to,
+                                    rule_catalog=rule_catalog,
+                                    catalog_schema=catalog_schema,
                                 )
                                 if (
                                     monorepo_root
@@ -1034,7 +1229,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                         fallback_type=service.get("type") or dod_type,
                                         fallback_exceptions=check_exceptions,
                                         fallback_exception_reasons=exception_reasons,
-                                        rule_applies_to=rule_applies_to,
+                                        rule_catalog=rule_catalog,
+                                        catalog_schema=catalog_schema,
                                     )
                                 result = run_all_checks(
                                     repo_path,
@@ -1047,6 +1243,8 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                                     monorepo_root=monorepo_root,
                                     workspace_package_json_text=workspace_package_json_text,
                                     evaluator_config=evaluator_cfg,
+                                    rule_catalog=rule_catalog,
+                                    catalog_schema=catalog_schema,
                                 )
                                 findings_by_service[repo_id] = result.findings
                             except Exception as exc:
@@ -1092,5 +1290,15 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                             source="conformance_deterministic",
                             standards_version=standards_version,
                         )
+
+            # ── Non-repo-scan rules (ADR-004: applies_to absent) ─────────────
+            _run_applies_to_absent_checks(
+                ecosystem=ecosystem,
+                rule_catalog=rule_catalog,
+                standards_version=standards_version,
+                evaluator_standards_version=standards_version,
+                run_id=run_id,
+                prefect_log=prefect_log,
+            )
 
     prefect_log.info("%s: complete", flow_label)

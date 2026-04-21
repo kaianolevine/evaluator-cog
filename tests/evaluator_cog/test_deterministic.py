@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -15,9 +16,12 @@ from evaluator_cog.engine.deterministic import (
     check_common_python_utils_dep,
     check_duplicate_prefix,
     check_env_example,
+    check_eval_003,
+    check_eval_007,
     check_evaluation_step,
     check_failed_prefix,
     check_healthchecks_integration,
+    check_mono_003,
     check_mypy_in_ci,
     check_naming_conventions,
     check_no_hardcoded_secrets,
@@ -50,6 +54,71 @@ from evaluator_cog.engine.deterministic import (
 )
 from evaluator_cog.engine.evaluator_config import EvaluatorConfig
 from evaluator_cog.flows.conformance import _deduplicate_sibling_findings
+
+_TEST_RULE_CATALOG: dict[str, dict] = {
+    "DOC-001": {"applies_to": ["all"], "modifies": [], "status": "requirement"},
+    "CD-009": {
+        "applies_to": ["pipeline-cog", "trigger-cog", "api-service", "react-app"],
+        "modifies": [],
+        "status": "requirement",
+    },
+    "CD-002": {
+        "applies_to": ["pipeline-cog", "trigger-cog", "api-service", "react-app"],
+        "modifies": [],
+        "status": "requirement",
+    },
+    "CD-015": {
+        "applies_to": ["pipeline-cog", "trigger-cog"],
+        "modifies": [],
+        "status": "requirement",
+    },
+    "TEST-001": {
+        "applies_to": ["pipeline-cog", "api-service"],
+        "modifies": [],
+        "status": "requirement",
+    },
+    "PY-006": {
+        "applies_to": ["pipeline-cog", "api-service", "shared-library"],
+        "modifies": [],
+        "status": "requirement",
+    },
+    "PIPE-008": {
+        "applies_to": ["pipeline-cog"],
+        "modifies": [],
+        "status": "requirement",
+    },
+    "PIPE-009": {
+        "applies_to": ["pipeline-cog"],
+        "modifies": [],
+        "status": "requirement",
+    },
+    "PIPE-011": {
+        "applies_to": ["pipeline-cog"],
+        "modifies": [],
+        "status": "requirement",
+    },
+}
+
+_TEST_CATALOG_SCHEMA: dict = {
+    "traits": {
+        "logger-primitive": {
+            "description": "is the logger",
+            "exempts": ["CD-009"],
+            "downgrades": [],
+        },
+        "pipeline-cog-evaluator": {
+            "description": "self evaluator",
+            "exempts": ["PIPE-011"],
+            "downgrades": [],
+        },
+    }
+}
+
+
+def _attach_catalog(cfg: EvaluatorConfig) -> EvaluatorConfig:
+    cfg.rule_catalog = _TEST_RULE_CATALOG
+    cfg.catalog_schema = _TEST_CATALOG_SCHEMA
+    return cfg
 
 
 def _make_repo(files: dict[str, str]) -> Path:
@@ -1253,10 +1322,12 @@ def test_eval008_not_emitted_when_evaluator_yaml_present(tmp_path: Path) -> None
 
 def test_deferred_finding_has_info_and_flag(tmp_path: Path) -> None:
     """Deferrals downgrade severity to INFO and set deferred=True on findings."""
-    cfg = EvaluatorConfig(
-        repo_type="pipeline-cog",
-        deferral_ids=["DOC-001"],
-        deferral_reasons={"DOC-001": "scheduled"},
+    cfg = _attach_catalog(
+        EvaluatorConfig(
+            repo_type="pipeline-cog",
+            deferral_ids=["DOC-001"],
+            deferral_reasons={"DOC-001": "scheduled"},
+        )
     )
     # No README → DOC-001 would normally ERROR/WARN from check_readme
     result = run_all_checks(
@@ -1271,7 +1342,7 @@ def test_deferred_finding_has_info_and_flag(tmp_path: Path) -> None:
 
 
 def test_evaluator_config_trigger_cog_skips_pipeline_rules(tmp_path: Path) -> None:
-    cfg = EvaluatorConfig(repo_type="trigger-cog")
+    cfg = _attach_catalog(EvaluatorConfig(repo_type="trigger-cog"))
     src = tmp_path / "src" / "watcher"
     src.mkdir(parents=True)
     (src / "main.py").write_text("repository_dispatch = True\n")
@@ -1290,14 +1361,7 @@ def test_evaluator_config_shared_library_no_cd002_test001_py006_violations(
     tmp_path: Path,
 ) -> None:
     """Catalog-derived skips prevent WARN/ERROR on rules not applicable to shared-library."""
-    cfg = EvaluatorConfig(
-        repo_type="shared-library",
-        rule_applies_to={
-            "CD-002": ["pipeline-cog", "trigger-cog", "api-service", "react-app"],
-            "TEST-001": ["pipeline-cog", "api-service"],
-            "PY-006": ["pipeline-cog", "api-service", "shared-library"],
-        },
-    )
+    cfg = _attach_catalog(EvaluatorConfig(repo_type="shared-library"))
     _write_evaluator_yaml(tmp_path)
     (tmp_path / "README.md").write_text("# lib\n")
     (tmp_path / "CHANGELOG.md").write_text("# c\n")
@@ -1328,9 +1392,11 @@ def test_evaluator_config_shared_library_no_cd002_test001_py006_violations(
 def test_evaluator_config_pipeline_logger_primitive_skips_cd009_violation(
     tmp_path: Path,
 ) -> None:
-    cfg = EvaluatorConfig(
-        repo_type="pipeline-cog",
-        traits=["logger-primitive"],
+    cfg = _attach_catalog(
+        EvaluatorConfig(
+            repo_type="pipeline-cog",
+            traits=["logger-primitive"],
+        )
     )
     _write_evaluator_yaml(tmp_path)
     (tmp_path / "README.md").write_text("# p\ninput\noutput\n")
@@ -1357,6 +1423,196 @@ def test_evaluator_config_pipeline_logger_primitive_skips_cd009_violation(
         if f.get("rule_id") == "CD-009" and f.get("severity") in ("WARN", "ERROR")
     ]
     assert not cd009_bad
+
+
+def test_check_eval_003_flags_missing_rule_id() -> None:
+    """A finding without a rule ID reference in finding_text flags EVAL-003."""
+    fake_response = {
+        "data": [
+            {
+                "id": 1,
+                "finding": "Something is wrong but we won't say what rule",
+                "suggestion": "A sufficiently long remediation string that passes the length check easily.",
+                "standards_version": "4.0.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert any(
+        f["rule_id"] == "EVAL-003" and "no rule ID reference" in f["finding"]
+        for f in findings
+    )
+
+
+def test_check_eval_003_flags_too_short_finding() -> None:
+    fake_response = {
+        "data": [
+            {
+                "id": 2,
+                "finding": "PY-001 bad",  # <60 chars, has rule id
+                "suggestion": "A sufficiently long remediation string here.",
+                "standards_version": "4.0.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert any("too short" in f["finding"] for f in findings)
+
+
+def test_check_eval_003_passes_well_formed_finding() -> None:
+    fake_response = {
+        "data": [
+            {
+                "id": 3,
+                "finding": "PY-011: Module names in the snake_case directory use camelCase — inconsistent with PEP 8 and the repo's convention.",
+                "suggestion": "Rename the affected modules to snake_case per PY-011. Update imports across the codebase.",
+                "standards_version": "4.0.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert findings == []
+
+
+def test_check_mono_003_flags_duplicate_sibling_findings() -> None:
+    ecosystem = {
+        "services": [
+            {"id": "deejaytools-com-api", "monorepo": "deejaytools-com"},
+            {"id": "deejaytools-com-app", "monorepo": "deejaytools-com"},
+        ]
+    }
+
+    fake_response = {
+        "data": [
+            {
+                "repo": "deejaytools-com-api",
+                "rule_id": "XSTACK-001",
+                "finding": "common-typescript-utils not declared",
+                "standards_version": "4.0.0",
+                "run_id": "r1",
+            },
+            {
+                "repo": "deejaytools-com-app",
+                "rule_id": "XSTACK-001",
+                "finding": "common-typescript-utils not declared",
+                "standards_version": "4.0.0",
+                "run_id": "r1",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_mono_003(ecosystem=ecosystem)
+
+    assert any(f["rule_id"] == "MONO-003" for f in findings)
+    assert any("2 duplicate" in f["finding"] for f in findings)
+
+
+def test_check_mono_003_ignores_single_sibling_findings() -> None:
+    ecosystem = {
+        "services": [
+            {"id": "deejaytools-com-api", "monorepo": "deejaytools-com"},
+        ]
+    }
+    fake_response = {
+        "data": [
+            {
+                "repo": "deejaytools-com-api",
+                "rule_id": "XSTACK-001",
+                "finding": "x",
+                "standards_version": "4.0.0",
+                "run_id": "r1",
+            }
+        ]
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_mono_003(ecosystem=ecosystem)
+
+    assert findings == []
+
+
+def test_check_eval_007_flags_unimplemented_rules() -> None:
+    """A rule in the catalog with no matching CHECK_ID constant fires EVAL-007."""
+    catalog = {
+        "MADE-UP-999": {"applies_to": ["all"], "modifies": [], "status": "requirement"},
+    }
+    findings = check_eval_007(rule_catalog=catalog)
+    assert any(
+        f["rule_id"] == "EVAL-007"
+        and "MADE-UP-999" in f["finding"]
+        and "no CHECK_ID constant" in f["finding"]
+        for f in findings
+    )
+
+
+def test_check_eval_007_no_catalog_returns_empty() -> None:
+    assert check_eval_007(rule_catalog=None) == []
+    assert check_eval_007(rule_catalog={}) == []
+
+
+def test_check_eval_007_flags_major_version_skew() -> None:
+    catalog = {
+        "DOC-001": {"applies_to": ["all"], "modifies": [], "status": "requirement"}
+    }
+    findings = check_eval_007(
+        rule_catalog=catalog,
+        current_standards_version="5.0.0",
+        evaluator_standards_version="4.3.1",
+    )
+    assert any("major version skew" in f["finding"] for f in findings)
 
 
 @pytest.mark.parametrize(

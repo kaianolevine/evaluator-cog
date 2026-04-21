@@ -84,67 +84,203 @@ def test_parse_evaluator_yaml_unknown_trait_warns(
     assert any("unknown trait" in r.message for r in caplog.records)
 
 
-def test_all_skipped_ids_shared_library_with_catalog() -> None:
-    """With a catalog, type-based skips come from applies_to."""
-    catalog = {
-        # applies_to excludes shared-library -> skipped
-        "CD-002": ["pipeline-cog", "trigger-cog", "api-service", "react-app"],
-        "TEST-001": ["pipeline-cog", "api-service"],
-        "TEST-007": ["pipeline-cog", "api-service"],
-        # applies_to includes shared-library -> NOT skipped
-        "PY-006": ["pipeline-cog", "api-service", "shared-library"],
-        "XSTACK-001": [
-            "pipeline-cog",
-            "trigger-cog",
-            "api-service",
-            "react-app",
-            "shared-library",
-        ],
-        # applies_to='all' -> NEVER skipped
-        "DOC-001": ["all"],
-    }
-    cfg = EvaluatorConfig(repo_type="shared-library", rule_applies_to=catalog)
-    skipped = cfg.all_skipped_ids
-    assert {"CD-002", "TEST-001", "TEST-007"} <= skipped
-    assert "PY-006" not in skipped
-    assert "XSTACK-001" not in skipped
-    assert "DOC-001" not in skipped
+_FAKE_CATALOG = {
+    "rule_catalog": {
+        "PY-006": {
+            "applies_to": ["pipeline-cog", "api-service", "shared-library"],
+            "modifies": [],
+            "status": "requirement",
+        },
+        "XSTACK-001": {
+            "applies_to": [
+                "pipeline-cog",
+                "trigger-cog",
+                "api-service",
+                "react-app",
+                "shared-library",
+            ],
+            "modifies": [],
+            "status": "requirement",
+        },
+        "CD-009": {
+            "applies_to": ["pipeline-cog", "trigger-cog", "api-service", "react-app"],
+            "modifies": [],
+            "status": "requirement",
+        },
+        "CD-015": {
+            "applies_to": ["pipeline-cog", "trigger-cog"],
+            "modifies": [],
+            "status": "requirement",
+        },
+        "VER-003": {
+            "applies_to": [
+                "pipeline-cog",
+                "trigger-cog",
+                "api-service",
+                "static-site",
+                "react-app",
+            ],
+            "modifies": [],
+            "status": "requirement",
+        },
+        "VER-005": {
+            "applies_to": [
+                "pipeline-cog",
+                "trigger-cog",
+                "api-service",
+                "static-site",
+                "react-app",
+            ],
+            "modifies": [],
+            "status": "requirement",
+        },
+        "VER-006": {
+            "applies_to": [
+                "pipeline-cog",
+                "trigger-cog",
+                "api-service",
+                "static-site",
+                "react-app",
+            ],
+            "modifies": [],
+            "status": "requirement",
+        },
+        "MONO-001": {
+            "applies_to": ["api-service", "react-app"],
+            "modifies": ["XSTACK-001"],
+            "status": "requirement",
+        },
+        "EVAL-003": {"applies_to": None, "modifies": [], "status": "requirement"},
+        "DOC-001": {"applies_to": ["all"], "modifies": [], "status": "requirement"},
+    },
+    "catalog_schema": {
+        "traits": {
+            "logger-primitive": {
+                "description": "is the logger",
+                "exempts": ["CD-009"],
+                "downgrades": [],
+            },
+            "cloudflare-pages": {
+                "description": "pages",
+                "exempts": ["VER-003", "VER-005", "VER-006"],
+                "downgrades": [],
+            },
+            "multi-flow": {
+                "description": "multi",
+                "exempts": [],
+                "downgrades": [
+                    {"rule": "CD-015", "to": "INFO", "reason": "scanner limit"}
+                ],
+            },
+        },
+        "repo_types": {"pipeline-cog", "api-service"},
+        "statuses": {"requirement", "convention", "gap"},
+    },
+}
 
 
-def test_all_skipped_ids_static_site_cloudflare_trait() -> None:
-    cfg = EvaluatorConfig(repo_type="static-site", traits=["cloudflare-pages"])
-    skipped = cfg.all_skipped_ids
-    assert {"VER-003", "VER-005", "VER-006"} <= skipped
+def _cfg_with_catalog(**kwargs) -> EvaluatorConfig:
+    """Build an EvaluatorConfig with the fake catalog attached."""
+    cfg = EvaluatorConfig(**kwargs)
+    cfg.rule_catalog = _FAKE_CATALOG["rule_catalog"]
+    cfg.catalog_schema = _FAKE_CATALOG["catalog_schema"]
+    return cfg
 
 
-def test_all_skipped_ids_pipeline_cog_no_catalog_empty() -> None:
-    """Without a catalog, a pipeline-cog has no type auto-exceptions."""
-    cfg = EvaluatorConfig(repo_type="pipeline-cog")
-    assert cfg.all_skipped_ids == frozenset()
+def test_dispatch_scope_skips_rule_not_applying_to_type() -> None:
+    """Step 1 — scope. A rule's applies_to excludes this repo type → SKIP_SCOPE."""
+    cfg = _cfg_with_catalog(repo_type="shared-library")
+    result = cfg.resolve_dispatch("CD-015")
+    assert result.disposition.value == "skip_scope"
 
 
-def test_all_skipped_ids_pipeline_cog_with_catalog_skips_non_applicable() -> None:
-    """With a catalog, pipeline-cog skips rules whose applies_to excludes it."""
-    catalog = {
-        "FE-001": ["static-site"],  # skipped
-        "API-001": ["api-service"],  # skipped
-        "PIPE-001": ["pipeline-cog", "trigger-cog"],  # NOT skipped
-        "DOC-001": ["all"],  # NOT skipped
-    }
-    cfg = EvaluatorConfig(repo_type="pipeline-cog", rule_applies_to=catalog)
-    skipped = cfg.all_skipped_ids
-    assert "FE-001" in skipped
-    assert "API-001" in skipped
-    assert "PIPE-001" not in skipped
-    assert "DOC-001" not in skipped
+def test_dispatch_scope_applies_to_all_matches() -> None:
+    """applies_to=[all] means every repo type matches."""
+    cfg = _cfg_with_catalog(repo_type="standards-repo")
+    result = cfg.resolve_dispatch("DOC-001")
+    assert result.disposition.value == "run_default"
 
 
-def test_all_skipped_ids_api_service_with_catalog() -> None:
-    catalog = {
-        "CD-015": ["pipeline-cog", "trigger-cog"],  # applies_to excludes api-service
-    }
-    cfg = EvaluatorConfig(repo_type="api-service", rule_applies_to=catalog)
-    assert "CD-015" in cfg.all_skipped_ids
+def test_dispatch_trait_exempt_short_circuits() -> None:
+    """Step 2 — trait exemption beats repo exemption / deferral."""
+    cfg = _cfg_with_catalog(
+        repo_type="api-service",
+        traits=["logger-primitive"],
+        exemption_ids=["CD-009"],
+        exemption_reasons={"CD-009": "ignored because trait wins first"},
+    )
+    result = cfg.resolve_dispatch("CD-009")
+    assert result.disposition.value == "skip_trait_exempt"
+    assert "logger-primitive" in result.reason
+
+
+def test_dispatch_repo_exempt() -> None:
+    """Step 3 — per-repo exemption fires when no trait exempts."""
+    cfg = _cfg_with_catalog(
+        repo_type="shared-library",
+        exemption_ids=["PY-006"],
+        exemption_reasons={"PY-006": "not a consumer"},
+    )
+    result = cfg.resolve_dispatch("PY-006")
+    assert result.disposition.value == "skip_repo_exempt"
+    assert result.reason == "not a consumer"
+
+
+def test_dispatch_repo_deferral_runs_with_downgrade() -> None:
+    """Step 4 — deferral runs the check but produces RUN_DEFERRED."""
+    cfg = _cfg_with_catalog(
+        repo_type="api-service",
+        deferral_ids=["PY-006"],
+        deferral_reasons={"PY-006": "later"},
+    )
+    result = cfg.resolve_dispatch("PY-006")
+    assert result.disposition.value == "run_deferred"
+    assert result.reason == "later"
+
+
+def test_dispatch_trait_downgrade() -> None:
+    """Step 5 — trait downgrade. Check runs; severity overridden."""
+    cfg = _cfg_with_catalog(
+        repo_type="pipeline-cog",
+        traits=["multi-flow"],
+    )
+    result = cfg.resolve_dispatch("CD-015")
+    assert result.disposition.value == "run_downgraded"
+    assert result.downgraded_severity == "INFO"
+
+
+def test_dispatch_rule_modifier() -> None:
+    """Step 6 — when another rule's modifies: includes this rule
+    and the modifier's applies_to matches, RUN_MODIFIED is emitted."""
+    cfg = _cfg_with_catalog(repo_type="api-service")
+    result = cfg.resolve_dispatch("XSTACK-001")
+    assert result.disposition.value == "run_modified"
+    assert result.modifier_rule_id == "MONO-001"
+
+
+def test_dispatch_default_when_nothing_matches() -> None:
+    """Step 7 — no scope mismatch, no trait, no exemption, no modifier."""
+    cfg = _cfg_with_catalog(repo_type="api-service")
+    result = cfg.resolve_dispatch("CD-009")  # applies, no trait active
+    assert result.disposition.value == "run_default"
+
+
+def test_dispatch_applies_to_absent_skip_scope() -> None:
+    """ADR-004 — rules without applies_to return SKIP_SCOPE from the
+    standard dispatcher. PR 4 routes them via a separate path."""
+    cfg = _cfg_with_catalog(repo_type="pipeline-cog")
+    result = cfg.resolve_dispatch("EVAL-003")
+    assert result.disposition.value == "skip_scope"
+
+
+def test_all_skipped_ids_no_catalog_returns_only_explicit_exemptions() -> None:
+    """Without a catalog attached, all_skipped_ids returns just the
+    explicit exemption list."""
+    cfg = EvaluatorConfig(
+        repo_type="pipeline-cog",
+        exemption_ids=["PY-006"],
+    )
+    assert cfg.all_skipped_ids == frozenset({"PY-006"})
 
 
 def test_is_deferred() -> None:
@@ -158,19 +294,17 @@ def test_is_deferred() -> None:
 
 
 def test_is_skipped_auto_and_explicit() -> None:
-    catalog = {
-        "CD-002": ["pipeline-cog", "trigger-cog", "api-service", "react-app"],
-        "DOC-001": ["all"],
-    }
-    cfg = EvaluatorConfig(
+    cfg = _cfg_with_catalog(
         repo_type="shared-library",
         exemption_ids=["FE-777"],
         exemption_reasons={"FE-777": "custom"},
-        rule_applies_to=catalog,
     )
-    assert cfg.is_skipped("CD-002") is True  # catalog says not for shared-library
-    assert cfg.is_skipped("FE-777") is True  # explicit exemption
-    assert cfg.is_skipped("DOC-001") is False  # applies to all
+    # CD-015 is scoped to pipeline-cog/trigger-cog — skipped by scope
+    assert cfg.is_skipped("CD-015") is True
+    # FE-777 is an explicit exemption
+    assert cfg.is_skipped("FE-777") is True
+    # DOC-001 has applies_to=[all] — not skipped
+    assert cfg.is_skipped("DOC-001") is False
 
 
 @pytest.mark.parametrize(

@@ -116,6 +116,9 @@ def post_findings(
             "standards_version": standards_version,
             "source": source,
             "violation_id": violation_id,
+            "rule_status": f.get("status") or None,
+            "deferred": bool(f.get("deferred", False)),
+            "downgraded": bool(f.get("downgraded", False)),
         }
         if latest and (
             str(latest.get("run_id") or "").strip() == str(run_id).strip()
