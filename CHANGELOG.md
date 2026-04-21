@@ -1,3 +1,10 @@
+## [3.12.3](https://github.com/mini-app-polis/evaluator-cog/compare/v3.12.2...v3.12.3) (2026-04-21)
+
+
+### Bug Fixes
+
+* **conformance:** correct source tagging; stop LLM rules leaking into deterministic ([b52b90c](https://github.com/mini-app-polis/evaluator-cog/commit/b52b90cd99eb8b40ded804cd33337b70d20c6a63))
+
 ## [3.12.2](https://github.com/mini-app-polis/evaluator-cog/compare/v3.12.1...v3.12.2) (2026-04-21)
 
 
