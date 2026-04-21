@@ -20,22 +20,20 @@ from evaluator_cog.engine.deterministic import (
     check_healthchecks_integration,
     check_mypy_in_ci,
     check_naming_conventions,
-    check_no_dead_code,
     check_no_hardcoded_secrets,
     check_no_hardcoded_urls,
     check_no_manual_changelog,
     check_no_print_statements,
     check_no_retired_trigger_patterns,
     check_no_setup_py,
-    check_pipeline_cog_tests,
     check_pnpm_lockfile,
     check_pre_commit,
     check_prefect_serve_pattern,
     check_pyproject,
+    check_pytest_config,
     check_pytest_coverage_in_ci,
     check_react_hook_form_zod,
     check_readme,
-    check_readme_io,
     check_readme_running_locally,
     check_releaserc,
     check_releaserc_assets,
@@ -47,7 +45,6 @@ from evaluator_cog.engine.deterministic import (
     check_src_layout,
     check_structured_logging,
     check_tailwind,
-    check_test_structure,
     check_vite_react_ts,
     run_all_checks,
 )
@@ -259,7 +256,7 @@ def test_run_all_checks_pipeline_tests_require_pipeline_subtype() -> None:
         dod_type="new_cog",
     )
     pipeline_rule_ids = [f["rule_id"] for f in result_pipeline.findings]
-    assert "TEST-001" in pipeline_rule_ids
+    assert "TEST-001" not in pipeline_rule_ids
 
 
 def test_run_all_checks_skips_python_checks_for_frontend() -> None:
@@ -276,48 +273,6 @@ def test_run_all_checks_skips_python_checks_for_frontend() -> None:
     assert "PY-005" not in rule_ids
     assert "PY-006" not in rule_ids
     assert "PY-008" not in rule_ids
-
-
-def test_check_test_structure_no_test003_when_tests_mention_error(
-    tmp_path: Path,
-) -> None:
-    """TEST-003 must not require the literal word 'malform'; 'error' is enough."""
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_cog.py").write_text(
-        "def test_poll_error_caught_and_loop_continues():\n"
-        '    """First poll errors; loop logs the error and continues."""\n'
-        "    assert True\n"
-    )
-    findings = check_test_structure(tmp_path)
-    assert not any(f["rule_id"] == "TEST-003" for f in findings)
-
-
-def test_check_test_structure_no_test003_when_tests_mention_exception(
-    tmp_path: Path,
-) -> None:
-    """Tests that reference exception handling satisfy TEST-003."""
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_cog.py").write_text(
-        "def test_handles_exception():\n"
-        "    try:\n"
-        "        raise RuntimeError('x')\n"
-        "    except Exception:\n"
-        "        pass\n"
-    )
-    findings = check_test_structure(tmp_path)
-    assert not any(f["rule_id"] == "TEST-003" for f in findings)
-
-
-def test_check_test_structure_emits_test003_without_failure_signals(
-    tmp_path: Path,
-) -> None:
-    """Happy-path-only tests must still trigger TEST-003."""
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_cog.py").write_text(
-        "def test_happy_path():\n    assert 1 + 1 == 2\n"
-    )
-    findings = check_test_structure(tmp_path)
-    assert any(f["rule_id"] == "TEST-003" for f in findings)
 
 
 def test_check_naming_conventions_flags_camel_case_module() -> None:
@@ -385,17 +340,6 @@ def test_check_duplicate_prefix_flags_and_passes() -> None:
         }
     )
     assert check_duplicate_prefix(passing) == []
-
-
-def test_check_readme_io_flags_and_passes() -> None:
-    bad = _make_repo({"README.md": "# Title\nminimal\n"})
-    assert any(f["rule_id"] == "DOC-002" for f in check_readme_io(bad))
-    good = _make_repo(
-        {
-            "README.md": "# Service\nInput from source folder.\nProduces output to /v1/results endpoint.\n"
-        }
-    )
-    assert check_readme_io(good) == []
 
 
 def test_check_no_manual_changelog_flags_prose_section() -> None:
@@ -905,11 +849,21 @@ def test_check_pytest_coverage_in_ci_flags_missing(tmp_path: Path) -> None:
     assert any(f["rule_id"] == "TEST-006" for f in findings)
 
 
-def test_check_pipeline_cog_tests_flags_missing_normalization(tmp_path: Path) -> None:
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_basic.py").write_text("def test_ok(): assert True\n")
-    findings = check_pipeline_cog_tests(tmp_path)
-    assert any(f["rule_id"] == "TEST-001" for f in findings)
+def test_check_pytest_config_flags_missing(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    findings = check_pytest_config(tmp_path)
+    assert any(f["rule_id"] == "TEST-005" for f in findings)
+
+
+def test_check_pytest_config_passes_when_present(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'x'\n[tool.pytest.ini_options]\n"
+    )
+    assert check_pytest_config(tmp_path) == []
+
+
+def test_check_pytest_config_no_pyproject_is_silent(tmp_path: Path) -> None:
+    assert check_pytest_config(tmp_path) == []
 
 
 def test_check_no_retired_trigger_patterns_flags_repository_dispatch(
@@ -975,54 +929,6 @@ def test_run_all_checks_xstack003_does_not_fire_for_frontend_site(
 
 
 # ── Previously untested functions ─────────────────────────────────────────────
-
-
-def test_check_no_dead_code_flags_commented_code(tmp_path: Path) -> None:
-    (tmp_path / "src" / "pkg").mkdir(parents=True)
-    (tmp_path / "src" / "pkg" / "main.py").write_text(
-        "x = 1\n"
-        "# def old_function():\n"
-        "#     return x + 1\n"
-        "#     if x > 0:\n"
-        "#         pass\n"
-    )
-    findings = check_no_dead_code(tmp_path)
-    assert any(f["rule_id"] == "DOC-008" for f in findings)
-
-
-def test_check_no_dead_code_passes_clean(tmp_path: Path) -> None:
-    (tmp_path / "src" / "pkg").mkdir(parents=True)
-    (tmp_path / "src" / "pkg" / "main.py").write_text(
-        "# This is a normal comment\nx = 1\n"
-    )
-    assert check_no_dead_code(tmp_path) == []
-
-
-def test_check_no_dead_code_ignores_prose_with_code_tokens(tmp_path: Path) -> None:
-    """Explanatory comments using 'if'/'for' as prepositions must not be flagged."""
-    (tmp_path / "src" / "pkg").mkdir(parents=True)
-    (tmp_path / "src" / "pkg" / "main.py").write_text(
-        "latest = get_latest()\n"
-        "# Fetch once before the loop — avoids one GET per finding.\n"
-        "# Note: this compares against the single most-recent stored finding.\n"
-        "# Multi-finding batches may still accumulate duplicates if an earlier\n"
-        "# finding in the batch is not the most recent record for the repo.\n"
-        "# Known limitation — tracked for future improvement via composite key lookup.\n"
-    )
-    assert check_no_dead_code(tmp_path) == []
-
-
-def test_check_no_dead_code_ignores_architecture_comments(tmp_path: Path) -> None:
-    """Multi-line comments referencing function names with parens must not be flagged."""
-    (tmp_path / "src" / "pkg").mkdir(parents=True)
-    (tmp_path / "src" / "pkg" / "main.py").write_text(
-        "serve(deployment)\n"
-        "# pipeline_eval (flows/pipeline_eval.py) is intentionally NOT registered here.\n"
-        "# evaluate_pipeline_run() is called in-process by other cogs at the end of\n"
-        "# their flows. handle_prefect_flow_run_event() is invoked via Prefect Cloud\n"
-        "# automation webhook. Neither runs as a scheduled Prefect deployment.\n"
-    )
-    assert check_no_dead_code(tmp_path) == []
 
 
 def test_check_readme_running_locally_flags_missing_uv_sync(tmp_path: Path) -> None:

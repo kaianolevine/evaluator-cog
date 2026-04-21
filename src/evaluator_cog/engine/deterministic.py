@@ -735,106 +735,6 @@ def check_finally_cleanup(repo_path: Path) -> list[Finding]:
     return findings
 
 
-def check_readme_io(
-    repo_path: Path, monorepo_root: Path | None = None
-) -> list[Finding]:
-    """DOC-002: README describes inputs and outputs."""
-    CHECK_ID = "DOC-002"
-    findings = []
-    readme = repo_path / "README.md"
-    if not readme.exists() and monorepo_root:
-        readme = monorepo_root / "README.md"
-    if not readme.exists():
-        return findings
-    text = readme.read_text().lower()
-    signals = [
-        "input",
-        "output",
-        "source folder",
-        "drive",
-        "endpoint",
-        "produces",
-        "writes to",
-        "openapi",
-        "/v1/",
-    ]
-    found = sum(1 for s in signals if s in text)
-    if found < 2:
-        findings.append(
-            _finding(
-                "DOC-002",
-                "WARN",
-                "documentation_coverage",
-                "README does not clearly describe data inputs and outputs.",
-                "Document what goes in and what is produced/written by the service.",
-            )
-        )
-    return findings
-
-
-def check_no_dead_code(repo_path: Path) -> list[Finding]:
-    """DOC-008: No dead code."""
-    CHECK_ID = "DOC-008"
-    import re
-
-    findings = []
-    # Match commented-out code by requiring a code CONSTRUCT at the start of the
-    # payload, not merely a code token anywhere in prose. This avoids false
-    # positives from explanatory comments that reference function names or use
-    # prepositions like "if" or "for" mid-sentence.
-    #
-    # True positives caught: assignments (x = y), def/class declarations,
-    # if/for statements with a colon, return/import statements, and standalone
-    # function calls (must end the line — trailing prose indicates it's a
-    # reference, not a call being commented out).
-    code_like = re.compile(
-        r"^("
-        r"\w+\s*="  # assignment: x = ...
-        r"|def\s+\w+"  # function definition
-        r"|class\s+\w+"  # class definition
-        r"|if\s+\w+.*:"  # if statement with colon
-        r"|for\s+\w+\s+in\b"  # for loop
-        r"|return\s+\w+"  # return statement
-        r"|import\s+\w+"  # import statement
-        r"|from\s+\w+"  # from import
-        r"|\w+\(.*\)\s*$"  # standalone function call ending the line
-        r")"
-    )
-    paths = []
-    for pattern in ("*.py", "*.ts", "*.tsx", "*.astro"):
-        paths.extend(
-            (repo_path / "src").rglob(pattern) if (repo_path / "src").is_dir() else []
-        )
-    for path in paths:
-        try:
-            lines = path.read_text().splitlines()
-        except Exception:
-            continue
-        run = 0
-        for idx, line in enumerate(lines, start=1):
-            stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("//"):
-                payload = stripped.lstrip("#/ ").strip()
-                if code_like.match(payload):
-                    run += 1
-                else:
-                    run = 0
-            else:
-                run = 0
-            if run >= 3:
-                findings.append(
-                    _finding(
-                        "DOC-008",
-                        "WARN",
-                        "documentation_coverage",
-                        f"Potential dead/commented-out code in {path.relative_to(repo_path)} near line {idx}.",
-                        "Remove dead code or convert it into active implementation/tests.",
-                    )
-                )
-                break
-    return findings
-
-
 def check_split_package_identity(repo_path: Path) -> list[Finding]:
     """DOC-009: Split package identity documented at entry point."""
     CHECK_ID = "DOC-009"
@@ -3424,119 +3324,6 @@ def check_fetch_error_handling(repo_path: Path) -> list[Finding]:
     return findings
 
 
-def check_monorepo_shared_lib_root(
-    repo_path: Path,
-    workspace_package_json_text: str | None = None,
-    language: str = "python",
-) -> list[Finding]:
-    """MONO-001: Monorepo shared-lib check is satisfied by workspace root.
-
-    When a service sits inside a monorepo, XSTACK-001's dep check should
-    also honor the workspace root package.json. This rule itself is a
-    sanity check that the root actually carries the shared lib when the
-    per-app does not.
-    """
-    CHECK_ID = "MONO-001"
-    findings: list[Finding] = []
-    if language != "typescript":
-        return findings  # MONO-001 cares about pnpm workspaces; TS only in practice
-    if workspace_package_json_text is None:
-        return findings  # Not a monorepo context
-    per_app = repo_path / "package.json"
-    per_app_text = per_app.read_text() if per_app.exists() else ""
-    if (
-        "common-typescript-utils" not in per_app_text
-        and "common-typescript-utils" not in workspace_package_json_text
-    ):
-        findings.append(
-            _finding(
-                "MONO-001",
-                "ERROR",
-                "cross_repo_coherence",
-                "Monorepo: common-typescript-utils absent from both workspace root "
-                "and per-app package.json.",
-                "Add common-typescript-utils to the workspace root to satisfy XSTACK-001 "
-                "for all apps.",
-            )
-        )
-    return findings
-
-
-def check_monorepo_root_ci(
-    repo_path: Path, monorepo_root: Path | None = None
-) -> list[Finding]:
-    """MONO-002: Monorepo root carries CI; per-app doesn't need its own."""
-    CHECK_ID = "MONO-002"
-    findings: list[Finding] = []
-    if monorepo_root is None:
-        return findings  # Not a monorepo
-    root_ci = monorepo_root / ".github" / "workflows" / "ci.yml"
-    if not root_ci.exists():
-        findings.append(
-            _finding(
-                "MONO-002",
-                "WARN",
-                "structural_conformance",
-                "Monorepo root missing .github/workflows/ci.yml.",
-                "Add a root CI workflow that covers all sibling apps.",
-            )
-        )
-    return findings
-
-
-def check_per_item_vs_collection_tasks(repo_path: Path) -> list[Finding]:
-    """PIPE-003: Per-item and collection tasks are separate."""
-    CHECK_ID = "PIPE-003"
-    import ast
-
-    findings: list[Finding] = []
-    src = repo_path / "src"
-    if not src.is_dir():
-        return findings
-
-    for py_file in src.rglob("*.py"):
-        try:
-            text = py_file.read_text()
-            tree = ast.parse(text)
-        except Exception:
-            continue
-        rel = py_file.relative_to(repo_path)
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            has_task_decorator = any(
-                (isinstance(d, ast.Name) and d.id == "task")
-                or (
-                    isinstance(d, ast.Call)
-                    and isinstance(d.func, ast.Name)
-                    and d.func.id == "task"
-                )
-                or (isinstance(d, ast.Attribute) and d.attr == "task")
-                for d in node.decorator_list
-            )
-            if not has_task_decorator:
-                continue
-            body_src = ast.unparse(node)
-            # Heuristic: task references both per-item (append, add, process)
-            # AND collection rebuild (rebuild, full, all_items, summary)
-            per_item_markers = ["append(", "add(", "insert("]
-            collection_markers = ["rebuild", "all_items", "full_list", "regenerate"]
-            has_per_item = any(m in body_src for m in per_item_markers)
-            has_collection = any(m in body_src for m in collection_markers)
-            if has_per_item and has_collection:
-                findings.append(
-                    _finding(
-                        "PIPE-003",
-                        "WARN",
-                        "pipeline_consistency",
-                        f"{rel}::{node.name}: task mixes per-item processing with collection rebuild.",
-                        "Split into two tasks — one per-item, one collection-level — so "
-                        "retries can target the right level.",
-                    )
-                )
-    return findings
-
-
 def check_shared_resource_concurrency(repo_path: Path) -> list[Finding]:
     """PIPE-004: Flows writing shared resources use concurrency guards."""
     CHECK_ID = "PIPE-004"
@@ -3786,106 +3573,6 @@ def check_hardcoded_retry_delay(repo_path: Path) -> list[Finding]:
                                 "conditional so tests don't sleep.",
                             )
                         )
-    return findings
-
-
-def check_per_item_error_handling(repo_path: Path) -> list[Finding]:
-    """PRIN-002: Per-item try/except in pipeline entry points.
-
-    Heuristic: if a flow loops over a collection and there's no try/except
-    inside the loop, flag it — one bad item would abort the full run.
-    """
-    CHECK_ID = "PRIN-002"
-    import ast
-
-    findings: list[Finding] = []
-    src = repo_path / "src"
-    if not src.is_dir():
-        return findings
-
-    for py_file in src.rglob("*.py"):
-        try:
-            text = py_file.read_text()
-            tree = ast.parse(text)
-        except Exception:
-            continue
-        rel = py_file.relative_to(repo_path)
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            is_flow = any(
-                (isinstance(d, ast.Name) and d.id == "flow")
-                or (
-                    isinstance(d, ast.Call)
-                    and isinstance(d.func, ast.Name)
-                    and d.func.id == "flow"
-                )
-                or (isinstance(d, ast.Attribute) and d.attr == "flow")
-                for d in node.decorator_list
-            )
-            if not is_flow:
-                continue
-            # Find loops in the function body
-            for sub in ast.walk(node):
-                if not isinstance(sub, (ast.For, ast.AsyncFor)):
-                    continue
-                # Does the loop body contain a Try?
-                has_try = any(isinstance(x, ast.Try) for x in ast.walk(sub))
-                if not has_try:
-                    findings.append(
-                        _finding(
-                            "PRIN-002",
-                            "ERROR",
-                            "principles",
-                            f"{rel}::{node.name}: loop body has no try/except — one bad item aborts the full run.",
-                            "Wrap per-item processing in try/except so a single failure doesn't "
-                            "crash the whole flow.",
-                        )
-                    )
-                    break  # One finding per flow is enough
-    return findings
-
-
-def check_production_observability(
-    repo_path: Path, language: str = "python"
-) -> list[Finding]:
-    """PRIN-005: Production services have Sentry + structured logging."""
-    CHECK_ID = "PRIN-005"
-    findings: list[Finding] = []
-    src = repo_path / "src"
-    if not src.is_dir():
-        return findings
-
-    src_text = ""
-    for ext in ("*.py",) if language == "python" else ("*.ts", "*.tsx"):
-        for f in src.rglob(ext):
-            try:
-                src_text += "\n" + f.read_text()
-            except Exception:
-                continue
-
-    missing: list[str] = []
-    if language == "python":
-        if "sentry_sdk" not in src_text:
-            missing.append("Sentry")
-        if "common_python_utils" not in src_text and "mini_app_polis" not in src_text:
-            missing.append("structured logging (common-python-utils)")
-    else:
-        if "@sentry/" not in src_text and "Sentry.init" not in src_text:
-            missing.append("Sentry")
-        if "common-typescript-utils" not in src_text:
-            missing.append("structured logging (common-typescript-utils)")
-
-    if missing:
-        findings.append(
-            _finding(
-                "PRIN-005",
-                "ERROR",
-                "principles",
-                f"Production service missing: {', '.join(missing)}.",
-                "Add the missing observability components.",
-            )
-        )
     return findings
 
 
@@ -5152,116 +4839,21 @@ def check_meta_canonical_enums_are_dicts(repo_path: Path) -> list[Finding]:
 # -- Test checks --------------------------------------------------------------
 
 
-def check_pipeline_cog_tests(
-    repo_path: Path,
-    exceptions: frozenset[str] | None = None,
-) -> list[Finding]:
-    """TEST-001, TEST-002, TEST-004: pipeline cog critical path tests."""
-    CHECK_ID = "TEST-001"
-    _exc = exceptions or frozenset()
-    findings = []
-    tests_dir = repo_path / "tests"
-    if not tests_dir.is_dir():
-        return findings
-    test_files = list(tests_dir.rglob("test_*.py"))
-    all_content = "\n".join(f.read_text() for f in test_files)
-    checks = [
-        (
-            "TEST-001",
-            "WARN",
-            "testing_coverage",
-            "normalization",
-            "No normalization test found.",
-            "Add a test covering normalization or cleaning logic.",
-        ),
-        (
-            "TEST-002",
-            "WARN",
-            "testing_coverage",
-            "dedup",
-            "No deduplication test found.",
-            "Add a test covering duplicate detection logic.",
-        ),
-        (
-            "TEST-004",
-            "WARN",
-            "testing_coverage",
-            "shape",
-            "No output shape test found.",
-            "Add a test asserting output structure or schema.",
-        ),
-    ]
-    for rule_id, severity, dimension, keyword, finding_text, suggestion in checks:
-        if rule_id not in _exc and keyword not in all_content.lower():
-            findings.append(
-                _finding(rule_id, severity, dimension, finding_text, suggestion)
-            )
-    return findings
+def check_pytest_config(repo_path: Path) -> list[Finding]:
+    """TEST-005: pytest configuration present in pyproject.toml.
 
-
-# Substrings in test sources that indicate a failure-path test (TEST-003).
-FAILURE_PATH_SIGNALS = (
-    "malform",
-    "failure",
-    "fail",
-    "error",
-    "exception",
-    "invalid",
-    "raises",
-    "bad_input",
-    "boom",
-    "continues",
-    "loop_continues",
-    "does_not_abort",
-    "does_not_raise",
-)
-
-
-def check_test_structure(
-    repo_path: Path,
-    exceptions: frozenset[str] | None = None,
-) -> list[Finding]:
-    """TEST-003, TEST-005: test directory checks."""
-    CHECK_ID = "TEST-003"
-    _exc = exceptions or frozenset()
-    findings = []
-    tests_dir = repo_path / "tests"
-    if not tests_dir.is_dir():
-        if "TEST-003" not in _exc:
-            findings.append(
-                _finding(
-                    "TEST-003",
-                    "ERROR",
-                    "testing_coverage",
-                    "tests/ directory is absent.",
-                    "Add a tests/ directory with critical path tests.",
-                )
-            )
-        return findings
-
-    test_files = list(tests_dir.rglob("test_*.py"))
-    all_content = "\n".join(f.read_text() for f in test_files)
-
-    lowered = all_content.lower()
-    has_failure_path = any(signal in lowered for signal in FAILURE_PATH_SIGNALS)
-
-    if "TEST-003" not in _exc and not has_failure_path:
-        findings.append(
-            _finding(
-                "TEST-003",
-                "ERROR",
-                "testing_coverage",
-                "No failure path test found.",
-                "Add a failure-path test (e.g. invalid input or simulated error) asserting the cog handles it and continues.",
-            )
-        )
-
+    The wider test-structure checks that previously lived here (TEST-003
+    failure-path detection) were retired in favor of LLM routing per
+    the ecosystem-standards v3.8.0 classification. TEST-005 remains a
+    deterministic structural check and is preserved here with a proper
+    CHECK_ID.
+    """
+    CHECK_ID = "TEST-005"
+    findings: list[Finding] = []
     pyproject = repo_path / "pyproject.toml"
-    if (
-        "TEST-005" not in _exc
-        and pyproject.exists()
-        and "[tool.pytest.ini_options]" not in pyproject.read_text()
-    ):
+    if not pyproject.exists():
+        return findings
+    if "[tool.pytest.ini_options]" not in pyproject.read_text():
         findings.append(
             _finding(
                 "TEST-005",
@@ -5271,7 +4863,6 @@ def check_test_structure(
                 "Add pytest configuration to pyproject.toml.",
             )
         )
-
     return findings
 
 
@@ -5575,10 +5166,8 @@ def run_all_checks(
     findings: list[Finding] = []
 
     _run(lambda p: check_readme(p, monorepo_root=monorepo_root), "DOC-001")
-    _run(lambda p: check_readme_io(p, monorepo_root=monorepo_root), "DOC-002")
     _run(lambda p: check_changelog(p, monorepo_root=monorepo_root), "DOC-003")
     _run(lambda p: check_releaserc(p, monorepo_root=monorepo_root), "VER-003")
-    _run(check_no_dead_code, "DOC-008")
     _run(check_split_package_identity, "DOC-009")
 
     if not is_library:
@@ -5685,19 +5274,7 @@ def run_all_checks(
         _run(check_mypy_in_ci, "TEST-012")
 
     if is_python:
-        _mark_checked("TEST-003", "TEST-005")
-        try:
-            findings.extend(check_test_structure(repo_path, exceptions=_exceptions))
-        except Exception as exc:
-            findings.append(
-                _finding(
-                    "CHECKER",
-                    "WARN",
-                    "structural_conformance",
-                    f"check_test_structure raised an unexpected error: {exc}",
-                    "",
-                )
-            )
+        _run(check_pytest_config, "TEST-005")
 
     # DOC-013 README running locally — use new type for dod_type hint
     if "DOC-013" not in _exceptions:
@@ -5734,19 +5311,6 @@ def run_all_checks(
             _run(check_react_hook_form_zod, "FE-005")
 
     if is_pipeline_cog:
-        _mark_checked("TEST-001", "TEST-002", "TEST-004")
-        try:
-            findings.extend(check_pipeline_cog_tests(repo_path, exceptions=_exceptions))
-        except Exception as exc:
-            findings.append(
-                _finding(
-                    "CHECKER",
-                    "WARN",
-                    "structural_conformance",
-                    f"check_pipeline_cog_tests raised an unexpected error: {exc}",
-                    "",
-                )
-            )
         _run(check_retry_logic, "PIPE-007")
         _run(check_no_retired_trigger_patterns, "PIPE-008")
         _run(check_evaluation_step, "PIPE-009")
@@ -5906,44 +5470,18 @@ def run_all_checks(
     ):
         _run(check_fetch_error_handling, "FE-006")
 
-    # MONO-001 / MONO-002 — monorepo shared-lib + root CI.
-    if evaluator_config is not None and getattr(evaluator_config, "monorepo", None):
-
-        def _mono_001(p: Path) -> list[Finding]:
-            return check_monorepo_shared_lib_root(
-                p,
-                workspace_package_json_text=workspace_package_json_text,
-                language=language,
-            )
-
-        def _mono_002(p: Path) -> list[Finding]:
-            return check_monorepo_root_ci(p, monorepo_root=monorepo_root)
-
-        _run(_mono_001, "MONO-001")
-        _run(_mono_002, "MONO-002")
-
-    # Pipeline rules — PIPE-003, PIPE-004, PIPE-006, PIPE-011, PIPE-012
+    # Pipeline rules — PIPE-004, PIPE-006, PIPE-011, PIPE-012.
+    # PIPE-003 is LLM-routed per ecosystem-standards v3.8.0.
     if is_pipeline_cog or is_trigger_cog:
         _cog_st_pipe = "trigger" if is_trigger_cog else "pipeline"
 
         def _pipe_011_check(p: Path) -> list[Finding]:
             return check_final_evaluation_task(p, cog_subtype=_cog_st_pipe)
 
-        _run(check_per_item_vs_collection_tasks, "PIPE-003")
         _run(check_shared_resource_concurrency, "PIPE-004")
         _run(check_prefect_run_logger, "PIPE-006")
         _run(_pipe_011_check, "PIPE-011")
         _run(check_hardcoded_retry_delay, "PIPE-012")
-
-    # Principles — PRIN-002, PRIN-005. Applies broadly.
-    if is_pipeline_cog or is_trigger_cog:
-        _run(check_per_item_error_handling, "PRIN-002")
-    if is_pipeline_cog or is_trigger_cog or is_api_service:
-
-        def _prin_005(p: Path) -> list[Finding]:
-            return check_production_observability(p, language=language)
-
-        _run(_prin_005, "PRIN-005")
 
     # Python — PY-004, PY-015
     if language == "python" and (is_pipeline_cog or is_api_service or is_library):
