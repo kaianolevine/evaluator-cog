@@ -214,7 +214,8 @@ def check_eval_007(
     callers that build rule_catalog dicts by hand.
 
     A deterministic rule counts as "implemented" if any of the
-    following appear in deterministic.py:
+    following appear anywhere in the deterministic package
+    (``evaluator_cog/engine/deterministic/*.py``):
       - ``CHECK_ID = "<rule-id>"`` — the canonical constant convention.
       - ``_run(fn, "<rule-id>")`` — dispatch wrapper registration.
       - ``_mark_checked("<rule-id>", ...)`` — manual registration for
@@ -224,6 +225,13 @@ def check_eval_007(
     the rule. Matching on all three avoids false "unimplemented"
     findings for checks that are wired but don't follow the constant
     convention.
+
+    History: prior to the split of the monolithic ``deterministic.py``
+    into the current package, this function called ``inspect.getsource``
+    on its own module to collect markers. After the split, that
+    collected only the introspection module and falsely flagged every
+    rule implemented elsewhere in the package as drift. The scan now
+    walks every ``.py`` file in the package directory.
     """
     CHECK_ID = "EVAL-007"
     if not rule_catalog:
@@ -232,20 +240,29 @@ def check_eval_007(
     findings: list[Finding] = []
 
     import inspect
+    from pathlib import Path
 
-    this_module_src = inspect.getsource(inspect.getmodule(check_eval_007))
+    _check_id_re = re.compile(r'CHECK_ID\s*=\s*"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"')
+    _run_re = re.compile(r'_run\([^,]+,\s*"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"')
+    _mark_call_re = re.compile(r"_mark_checked\(([^)]*)\)")
+    _id_literal_re = re.compile(r'"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"')
 
-    # CHECK_ID constants (canonical rule registration).
-    impl_ids: set[str] = set(
-        re.findall(r'CHECK_ID\s*=\s*"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"', this_module_src)
-    )
-    # _run() dispatch registrations.
-    impl_ids.update(
-        re.findall(r'_run\([^,]+,\s*"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"', this_module_src)
-    )
-    # _mark_checked registrations.
-    for call_args in re.findall(r"_mark_checked\(([^)]*)\)", this_module_src):
-        impl_ids.update(re.findall(r'"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"', call_args))
+    impl_ids: set[str] = set()
+    try:
+        package_dir = Path(inspect.getfile(inspect.getmodule(check_eval_007))).parent
+        py_files = sorted(package_dir.glob("*.py"))
+    except (TypeError, OSError):
+        py_files = []
+
+    for py_file in py_files:
+        try:
+            src = py_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        impl_ids.update(_check_id_re.findall(src))
+        impl_ids.update(_run_re.findall(src))
+        for call_args in _mark_call_re.findall(src):
+            impl_ids.update(_id_literal_re.findall(call_args))
 
     # Only deterministic rules require a CHECK_ID constant. LLM rules
     # are dispatched through engine/llm.py and should not be flagged
@@ -266,9 +283,10 @@ def check_eval_007(
                 "WARN",
                 "standards_currency",
                 f"Rule {rid} is a deterministic checkable rule in the catalog "
-                f"but is not registered in evaluator-cog's deterministic.py "
+                f"but is not registered in evaluator-cog's deterministic package "
                 f"(no CHECK_ID constant, _run() call, or _mark_checked() "
-                f"reference found).",
+                f"reference found in any module under "
+                f"evaluator_cog/engine/deterministic/).",
                 f"Add a check function for {rid} and register it via "
                 f'_run(check_fn, "{rid}") or declare CHECK_ID = "{rid}".',
             )
@@ -280,8 +298,9 @@ def check_eval_007(
                 CHECK_ID,
                 "ERROR",
                 "standards_currency",
-                f"Rule {rid} is registered in evaluator-cog's deterministic.py "
-                f"but has no matching rule in the catalog (orphaned check).",
+                f"Rule {rid} is registered in evaluator-cog's deterministic "
+                f"package but has no matching rule in the catalog "
+                f"(orphaned check).",
                 "Remove the implementation or restore the rule in ecosystem-standards.",
             )
         )

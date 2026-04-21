@@ -1640,6 +1640,52 @@ def test_check_eval_007_flags_major_version_skew() -> None:
     assert any("major version skew" in f["finding"] for f in findings)
 
 
+def test_check_eval_007_scans_whole_deterministic_package() -> None:
+    """Regression test for the post-split scan bug.
+
+    Prior to the deterministic.py → package split, check_eval_007 called
+    inspect.getsource on its own module, which read only introspection.py.
+    After the split, this collected just the three CHECK_IDs that live in
+    introspection.py (EVAL-003, MONO-003, EVAL-007) and falsely flagged
+    every rule implemented elsewhere in the package as unimplemented —
+    producing ~100 false-positive drift findings per run.
+
+    This test seeds the catalog with rules registered via each of the
+    three implementation patterns, across multiple files, and asserts
+    none are flagged as unimplemented:
+      - CHECK_ID constant in python.py (PY-001, PY-008)
+      - CHECK_ID constant in api.py (API-001)
+      - _run() call in runner.py (API-004)
+      - _mark_checked() call in runner.py (PY-002, VER-005, CD-002)
+    """
+    catalog = {
+        rid: {
+            "applies_to": ["all"],
+            "modifies": [],
+            "status": "requirement",
+            "check_mode": "deterministic",
+        }
+        for rid in (
+            "PY-001",
+            "PY-008",
+            "PY-002",
+            "API-001",
+            "API-004",
+            "VER-005",
+            "CD-002",
+        )
+    }
+    findings = check_eval_007(rule_catalog=catalog)
+    unimplemented = [
+        f for f in findings if "not registered" in str(f.get("finding", ""))
+    ]
+    assert unimplemented == [], (
+        "Expected all seeded rules to be detected as implemented "
+        "across the deterministic package; got false drift for: "
+        f"{[f['finding'][:80] for f in unimplemented]}"
+    )
+
+
 @pytest.mark.parametrize(
     ("repo_type", "language", "expected"),
     [
