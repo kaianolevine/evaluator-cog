@@ -1,3 +1,12 @@
+## [3.12.1](https://github.com/mini-app-polis/evaluator-cog/compare/v3.12.0...v3.12.1) (2026-04-21)
+
+
+### Bug Fixes
+
+* **api-client:** drop v4.0.0 dispatch fields from POST payload — api rejects with 422 extra_forbidden ([7a19c5b](https://github.com/mini-app-polis/evaluator-cog/commit/7a19c5bd990a4551ee5384f4113ce5654a67d083))
+* **evaluator:** EVAL-007 skips LLM-routed rules when checking for missing CHECK_ID constants ([e190f97](https://github.com/mini-app-polis/evaluator-cog/commit/e190f97cf64e65af8a0e2fba7c4152d7ce93394d))
+* **evaluator:** strip v4 dispatch fields from POST payload, skip LLM rules in EVAL-007, implement 7 missing deterministic checks, backfill docstrings ([5a7877d](https://github.com/mini-app-polis/evaluator-cog/commit/5a7877d1c655a017a9a1b8ad85631b186fd4c4e0))
+
 # [3.12.0](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.10...v3.12.0) (2026-04-21)
 
 
