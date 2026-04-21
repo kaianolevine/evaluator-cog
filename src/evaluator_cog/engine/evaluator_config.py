@@ -236,16 +236,27 @@ class EvaluatorConfig:
         return DispositionResult(disposition=Disposition.RUN_DEFAULT)
 
     def is_deferred(self, rule_id: str) -> bool:
-        """TODO: describe this function."""
+        """True when `rule_id` appears in this repo's `deferrals:` list."""
         return rule_id in self.deferral_ids
 
     def is_skipped(self, rule_id: str) -> bool:
-        """TODO: describe this function."""
+        """True when `rule_id` will be skipped for this repo.
+
+        Convenience wrapper over `all_skipped_ids` — covers scope
+        mismatches, trait exemptions, and per-repo exemptions.
+        """
         return rule_id in self.all_skipped_ids
 
     @property
     def language(self) -> str:
-        """TODO: describe this function."""
+        """Primary source language for this repo type.
+
+        Returns 'python' for Python service types (pipeline-cog,
+        trigger-cog, api-service, shared-library, standards-repo) and
+        'typescript' for frontend types (static-site, react-app).
+        Note: api-service may be either — language is authoritative
+        from ecosystem.yaml, not from this property.
+        """
         if self.repo_type in (
             "pipeline-cog",
             "trigger-cog",
@@ -258,7 +269,7 @@ class EvaluatorConfig:
 
     @property
     def is_python_service(self) -> bool:
-        """TODO: describe this function."""
+        """True for repo types whose canonical implementation is Python."""
         return self.repo_type in (
             "pipeline-cog",
             "trigger-cog",
@@ -268,42 +279,42 @@ class EvaluatorConfig:
 
     @property
     def is_pipeline_cog(self) -> bool:
-        """TODO: describe this function."""
+        """True when repo_type == 'pipeline-cog'."""
         return self.repo_type == "pipeline-cog"
 
     @property
     def is_trigger_cog(self) -> bool:
-        """TODO: describe this function."""
+        """True when repo_type == 'trigger-cog'."""
         return self.repo_type == "trigger-cog"
 
     @property
     def is_api_service(self) -> bool:
-        """TODO: describe this function."""
+        """True when repo_type == 'api-service'."""
         return self.repo_type == "api-service"
 
     @property
     def is_shared_library(self) -> bool:
-        """TODO: describe this function."""
+        """True when repo_type == 'shared-library'."""
         return self.repo_type == "shared-library"
 
     @property
     def is_static_site(self) -> bool:
-        """TODO: describe this function."""
+        """True when repo_type == 'static-site'."""
         return self.repo_type == "static-site"
 
     @property
     def is_react_app(self) -> bool:
-        """TODO: describe this function."""
+        """True when repo_type == 'react-app'."""
         return self.repo_type == "react-app"
 
     @property
     def is_standards_repo(self) -> bool:
-        """TODO: describe this function."""
+        """True when repo_type == 'standards-repo'."""
         return self.repo_type == "standards-repo"
 
     @property
     def is_frontend(self) -> bool:
-        """TODO: describe this function."""
+        """True when repo_type is a frontend type (static-site or react-app)."""
         return self.repo_type in ("static-site", "react-app")
 
 

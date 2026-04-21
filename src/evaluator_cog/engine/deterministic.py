@@ -28,7 +28,13 @@ Finding = dict[str, Any]
 
 @dataclass
 class CheckResult:
-    """TODO: describe this class."""
+    """Return value of run_all_checks.
+
+    Carries both the list of findings produced by the run and the set of
+    rule IDs the deterministic engine actually exercised. The LLM pass
+    uses `checked_rule_ids` to suppress soft-rule assessment of rules
+    already covered deterministically.
+    """
 
     findings: list[Finding]
     checked_rule_ids: set[str]
