@@ -1,3 +1,10 @@
+## [3.11.9](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.8...v3.11.9) (2026-04-21)
+
+
+### Bug Fixes
+
+* **conformance:** fetch standards domains from index.yaml ([eb86cc6](https://github.com/mini-app-polis/evaluator-cog/commit/eb86cc602a10556457f83144b76d9df98687ea96))
+
 ## [3.11.8](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.7...v3.11.8) (2026-04-21)
 
 
