@@ -51,6 +51,32 @@ _STANDARDS_VERSION_URL = os.environ.get(
     "https://raw.githubusercontent.com/mini-app-polis/ecosystem-standards/main/package.json",
 )
 _STANDARDS_BASE_URL = "https://raw.githubusercontent.com/mini-app-polis/ecosystem-standards/main/standards"
+_ECOSYSTEM_STANDARDS_INDEX_URL = os.environ.get(
+    "ECOSYSTEM_STANDARDS_INDEX_URL",
+    "https://raw.githubusercontent.com/mini-app-polis/ecosystem-standards/main/index.yaml",
+)
+
+# Canonical fallback list used only when index.yaml cannot be fetched.
+# Keep this in sync with ecosystem-standards/index.yaml::files (any entry
+# whose `file` begins with "standards/"). The runtime domain list is
+# derived from index.yaml on every call; this list is the safety net.
+_FALLBACK_STANDARDS_DOMAINS: tuple[str, ...] = (
+    "api",
+    "auth",
+    "config",
+    "cross-stack",
+    "delivery",
+    "documentation",
+    "evaluation",
+    "frontend",
+    "meta",
+    "monorepo",
+    "pipeline",
+    "principles",
+    "python",
+    "testing",
+    "versioning",
+)
 
 
 def _on_completion(flow, flow_run, state) -> None:
@@ -125,6 +151,68 @@ def _read_workspace_package_json(monorepo_root: Path) -> str:
     return ""
 
 
+def _resolve_standards_domains() -> list[str]:
+    """
+    Return the list of standards domain names to fetch, sourced from
+    ecosystem-standards/index.yaml. Falls back to a hardcoded canonical
+    list if the index cannot be fetched or parsed.
+
+    Only entries whose `file` begins with `standards/` are included —
+    `ecosystem.yaml` and `definitions-of-done.yaml` are not rule catalogs
+    and are fetched separately where needed.
+
+    Never raises. Emits a single warning per process if any domain in the
+    fallback list is missing from the live index (drift), and a single
+    warning if any domain in the live index is missing from the fallback
+    (evaluator is out of date vs the standards repo).
+    """
+    index = _fetch_yaml(_ECOSYSTEM_STANDARDS_INDEX_URL)
+    raw_files = index.get("files") if isinstance(index, dict) else None
+    if not isinstance(raw_files, list) or not raw_files:
+        log.warning(
+            "conformance: index.yaml fetch returned no files — "
+            "using hardcoded fallback domain list"
+        )
+        return list(_FALLBACK_STANDARDS_DOMAINS)
+
+    live_domains: list[str] = []
+    for entry in raw_files:
+        if not isinstance(entry, dict):
+            continue
+        file_path = str(entry.get("file") or "")
+        if not file_path.startswith("standards/"):
+            continue
+        domain = str(entry.get("domain") or "").strip()
+        if domain:
+            live_domains.append(domain)
+
+    if not live_domains:
+        log.warning(
+            "conformance: index.yaml had no standards/ entries — "
+            "using hardcoded fallback domain list"
+        )
+        return list(_FALLBACK_STANDARDS_DOMAINS)
+
+    live_set = set(live_domains)
+    fallback_set = set(_FALLBACK_STANDARDS_DOMAINS)
+    missing_from_live = fallback_set - live_set
+    missing_from_fallback = live_set - fallback_set
+    if missing_from_live:
+        log.warning(
+            "conformance: domains in fallback list are absent from live "
+            "index.yaml — standards repo may have removed: %s",
+            sorted(missing_from_live),
+        )
+    if missing_from_fallback:
+        log.warning(
+            "conformance: live index.yaml has domains not in evaluator "
+            "fallback — evaluator fallback is stale, add these: %s",
+            sorted(missing_from_fallback),
+        )
+
+    return live_domains
+
+
 def _fetch_standards_for_service(
     service: dict, evaluator_cfg: EvaluatorConfig | None = None
 ) -> list[dict]:
@@ -142,20 +230,7 @@ def _fetch_standards_for_service(
 
     dod_type = service.get("dod_type")
     all_rules = []
-    domains = [
-        "python",
-        "testing",
-        "api",
-        "pipeline",
-        "frontend",
-        "delivery",
-        "documentation",
-        "evaluation",
-        "principles",
-        "cross-stack",
-        "monorepo",
-        "meta",
-    ]
+    domains = _resolve_standards_domains()
 
     def _to_rule_dict(rule: dict) -> dict:
         check_notes = (rule.get("check_notes") or "").strip()
