@@ -210,19 +210,12 @@ def build_conformance_prompt(
     repo_path: Path | None = None,
 ) -> str:
     """Build the LLM prompt for soft-rule conformance assessment."""
-    import yaml as _yaml
-
     evaluator_yaml_content = ""
-    repo_type = "pipeline-cog"
     if repo_path is not None:
         evaluator_yaml_path = repo_path / "evaluator.yaml"
         if evaluator_yaml_path.exists():
             with suppress(Exception):
                 evaluator_yaml_content = evaluator_yaml_path.read_text().strip()
-        if evaluator_yaml_content:
-            with suppress(Exception):
-                ev = _yaml.safe_load(evaluator_yaml_content) or {}
-                repo_type = str(ev.get("type", "pipeline-cog") or "pipeline-cog")
 
     findings_summary = (
         "\n".join(
@@ -371,14 +364,6 @@ Traits listed modify which rules apply:
 - `pipeline-cog-evaluator`: PIPE-011 does not apply — this repo IS the evaluator.
 - `logger-primitive`: CD-009 and XSTACK-001 do not apply — this repo defines the shared logger primitive.
 - `cloudflare-pages`: VER-003, VER-005, VER-006 do not apply — Cloudflare Pages Git integration handles deployment.
-
-Additionally, rules that are auto-excepted by repo type (`type: {repo_type}`) should not be flagged:
-- `shared-library`: TEST-001, TEST-002, TEST-003, TEST-004, TEST-007, CD-002, CD-009, CD-010, PY-006, XSTACK-001, all PIPE rules, CD-007, CD-015
-- `static-site`: same as shared-library plus XSTACK-003
-- `api-service`: all PIPE rules, TEST-001–004, CD-007, CD-015
-- `trigger-cog`: all PIPE rules except CD-007, TEST-001–004, CD-015
-- `standards-repo`: all PIPE rules, TEST-001–004, CD-002, CD-009, CD-010, XSTACK-001, PY-006, CD-007, CD-015
-
 """
     else:
         evaluator_yaml_block = ""
@@ -458,10 +443,10 @@ When all soft rules are clean: emit exactly ONE INFO summarising
 overall repo health. Do not emit one finding per rule.
 
 Respond with ONLY valid JSON (no markdown) in this exact shape:
-{{"findings":[{{"rule_id":"...","dimension":"structural_conformance","severity":"CRITICAL|ERROR|WARN|INFO|SUCCESS","finding":"...","suggestion":"..."}}]}}
+{{"findings":[{{"rule_id":"...","dimension":"structural_conformance","severity":"ERROR|WARN|INFO","finding":"...","suggestion":"..."}}]}}
 
 Rules:
-- severity must be INFO, WARN, or ERROR (uppercase).
+- severity must be INFO, WARN, or ERROR (uppercase). CRITICAL and SUCCESS are reserved for emission-only paths (flow crashes, clean-run completion) and must not be used for rule findings.
 - Reference the rule ID from the standards list above.
 - Keep findings specific and actionable.
 - If all soft rules appear clean, emit a single INFO finding summarising repo health.
