@@ -12,6 +12,7 @@ from evaluator_cog.engine.evaluator_config import EvaluatorConfig
 from evaluator_cog.flows.conformance import (
     _fetch_standards_for_service,
     _run_standalone_deterministic,
+    conformance_check_flow,
     run_conformance_check,
 )
 
@@ -305,3 +306,91 @@ def test_run_standalone_deterministic_calls_load_evaluator_config(
         source="conformance_deterministic",
         standards_version="2.5.0",
     )
+
+
+def test_conformance_monorepo_service_failure_does_not_abort_flow(
+    monkeypatch,
+) -> None:
+    """PRIN-002: a single bad service record in a monorepo must not
+    crash the whole flow — the remaining siblings must still run.
+
+    Uses a minimal fake ecosystem with two monorepo apps. The first raises
+    during per-service setup; the second must still reach run_all_checks.
+    """
+    import evaluator_cog.flows.conformance as conf
+
+    ecosystem = {
+        "services": [
+            {
+                "id": "app-a",
+                "repo": "mono",
+                "status": "active",
+                "type": "api",
+                "language": "typescript",
+                "monorepo": "mono-1",
+                "monorepo_path": "apps/a",
+                "check_exceptions": "INVALID_NOT_A_LIST",
+            },
+            {
+                "id": "app-b",
+                "repo": "mono",
+                "status": "active",
+                "type": "api",
+                "language": "typescript",
+                "monorepo": "mono-1",
+                "monorepo_path": "apps/b",
+                "check_exceptions": [],
+            },
+        ],
+        "monorepos": [
+            {
+                "id": "mono-1",
+                "repo": "mono",
+                "apps": [
+                    {"service_id": "app-a", "path": "apps/a"},
+                    {"service_id": "app-b", "path": "apps/b"},
+                ],
+            }
+        ],
+    }
+
+    def fake_download_repo(repo_name, tmp_dir):
+        root = Path(tmp_dir) / repo_name
+        (root / "apps" / "a").mkdir(parents=True, exist_ok=True)
+        (root / "apps" / "b").mkdir(parents=True, exist_ok=True)
+        return root
+
+    monkeypatch.setenv("STANDARDS_VERSION", "9.9.9-test")
+
+    parse_calls: list = []
+    _original_parse = conf._parse_check_exceptions
+
+    def tracking_parse(raw):
+        parse_calls.append(raw)
+        if isinstance(raw, str) and raw == "INVALID_NOT_A_LIST":
+            raise ValueError("bad check_exceptions shape")
+        if not isinstance(raw, list):
+            raw = []
+        return _original_parse(raw)
+
+    run_all_calls: list = []
+
+    def fake_run_all_checks(*args, **kwargs):
+        run_all_calls.append(kwargs)
+        result = MagicMock()
+        result.findings = []
+        result.checked_rule_ids = set()
+        return result
+
+    with (
+        patch.object(conf, "_get_standards_version", return_value="9.9.9-test"),
+        patch.object(conf, "_fetch_yaml", return_value=ecosystem),
+        patch.object(conf, "_download_repo", side_effect=fake_download_repo),
+        patch.object(conf, "_parse_check_exceptions", side_effect=tracking_parse),
+        patch.object(conf, "run_all_checks", side_effect=fake_run_all_checks),
+        patch.object(conf, "post_findings"),
+        patch.object(conf, "_fetch_standards_for_service", return_value=[]),
+    ):
+        conformance_check_flow(run_llm=False)
+
+    assert len(run_all_calls) == 1

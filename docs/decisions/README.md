@@ -35,4 +35,6 @@ What becomes easier or more difficult to do because of this change?
 
 ## Index
 
-No decisions recorded yet.
+- [0001. Parameterized single conformance flow instead of two deployments](./0001-parameterized-single-conformance-flow.md)
+- [0002. Deduplicate findings across monorepo sibling apps](./0002-monorepo-sibling-finding-deduplication.md)
+- [0003. Per-repo evaluator.yaml for exemptions, deferrals, and type scoping](./0003-per-repo-evaluator-yaml.md)

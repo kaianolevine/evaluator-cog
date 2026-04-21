@@ -1501,7 +1501,11 @@ def check_prefect_cloud_observability(
     src = repo_path / "src"
     if src.is_dir():
         py_src = "\n".join(f.read_text() for f in src.rglob("*.py"))
-        if "apscheduler" in py_src.lower():
+        if (
+            "apscheduler" in py_src.lower()
+            and not _is_inside_string_literal(py_src, "APScheduler")
+            and not _is_inside_string_literal(py_src, "apscheduler")
+        ):
             findings.append(
                 _finding(
                     "CD-005",
@@ -2008,7 +2012,12 @@ def check_inputs_not_deleted(repo_path: Path) -> list[Finding]:
                     "Never delete raw input artifacts from Drive — move to derived outputs only.",
                 )
             )
-        if "trashed" in text.lower() and "update" in text.lower() and "files()" in text:
+        if (
+            "trashed" in text.lower()
+            and "update" in text.lower()
+            and "files()" in text
+            and not _is_inside_string_literal(text, "trashed")
+        ):
             findings.append(
                 _finding(
                     "PIPE-005",
@@ -4362,6 +4371,44 @@ def check_route_contract_tests(repo_path: Path) -> list[Finding]:
     return findings
 
 
+def _call_is_mock_factory(call: ast.Call) -> bool:
+    """True if this call expression constructs or enters a unittest.mock helper."""
+    f = call.func
+    if isinstance(f, ast.Name):
+        return f.id in ("MagicMock", "AsyncMock", "Mock", "patch")
+    if isinstance(f, ast.Attribute):
+        if f.attr in ("MagicMock", "AsyncMock", "Mock"):
+            return True
+        if (
+            f.attr == "object"
+            and isinstance(f.value, ast.Name)
+            and f.value.id == "patch"
+        ):
+            return True
+        if f.attr == "patch":
+            return True
+    return False
+
+
+def _function_body_uses_mock_factories(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """True if the function (including decorators and with-statements) uses mock factories."""
+    for dec in fn.decorator_list:
+        for sub in ast.walk(dec):
+            if isinstance(sub, ast.Call) and _call_is_mock_factory(sub):
+                return True
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.With):
+            for item in sub.items:
+                ce = item.context_expr
+                if isinstance(ce, ast.Call) and _call_is_mock_factory(ce):
+                    return True
+        if isinstance(sub, ast.Call) and _call_is_mock_factory(sub):
+            return True
+    return False
+
+
 def check_mock_assertions(repo_path: Path) -> list[Finding]:
     """TEST-011: Mocks have corresponding assertions.
 
@@ -4370,9 +4417,13 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
     ``call_count``, ``call_args``, or ``call_args_list``.
 
     A test that creates a mock but never interrogates it is flagged.
-    """
-    import re
 
+    Uses AST parsing so that ``def test_X():`` text appearing inside string
+    literals (e.g. fixture snippets in the checker's own test suite) is not
+    mistaken for a real test function, and so mock names embedded only in
+    string literals do not count as mock usage. The previous regex-based
+    implementation self-flagged when scanning evaluator-cog's own repo.
+    """
     findings: list[Finding] = []
     tests = repo_path / "tests"
     if not tests.is_dir():
@@ -4397,28 +4448,46 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
             text = test_file.read_text()
         except Exception:
             continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
         rel = test_file.relative_to(repo_path)
-        for m in re.finditer(r"def (test_\w+)\([^)]*\):([\s\S]*?)(?=\ndef |\Z)", text):
-            fn_name, body = m.group(1), m.group(2)
-            creates_mock = bool(
-                re.search(r"\b(MagicMock|AsyncMock|patch|mock_\w+)\b", body)
-            )
-            if not creates_mock:
+
+        # Collect top-level + class-level test functions as real AST nodes.
+        # Anything inside a string literal is absent from this list.
+        test_fns: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name.startswith("test_"):
+                    test_fns.append(node)
+            elif isinstance(node, ast.ClassDef):
+                for inner in node.body:
+                    if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                        inner.name.startswith("test_")
+                    ):
+                        test_fns.append(inner)
+
+        for fn in test_fns:
+            body_src = ast.get_source_segment(text, fn) or ""
+            if not body_src:
                 continue
-            has_assert = bool(_mock_assert_re.search(body))
-            if not has_assert:
-                findings.append(
-                    _finding(
-                        "TEST-011",
-                        "ERROR",
-                        "test_coverage",
-                        f"{rel}::{fn_name}: creates mocks but has no mock verification "
-                        f"(called / not_called / any_call helpers, or call_count / "
-                        f"call_args / call_args_list).",
-                        "Verify the mock was exercised using unittest.mock's standard "
-                        "verification APIs or by inspecting call_count / call_args.",
-                    )
+            if not _function_body_uses_mock_factories(fn):
+                continue
+            if _mock_assert_re.search(body_src):
+                continue
+            findings.append(
+                _finding(
+                    "TEST-011",
+                    "ERROR",
+                    "test_coverage",
+                    f"{rel}::{fn.name}: creates mocks but has no mock verification "
+                    f"(called / not_called / any_call helpers, or call_count / "
+                    f"call_args / call_args_list).",
+                    "Verify the mock was exercised using unittest.mock's standard "
+                    "verification APIs or by inspecting call_count / call_args.",
                 )
+            )
     return findings
 
 

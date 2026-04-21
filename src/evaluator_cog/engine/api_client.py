@@ -27,7 +27,8 @@ def _get_latest_stored_finding(
         else:
             import httpx
 
-            with httpx.Client(timeout=20.0) as client:
+            _timeout = float(os.environ.get("EVALUATOR_HTTP_TIMEOUT_SECONDS", "20"))
+            with httpx.Client(timeout=_timeout) as client:
                 r = client.get(
                     f"{api_base_url.rstrip('/')}/v1/evaluations",
                     params={"repo": repo, "limit": 1},

@@ -39,7 +39,8 @@ def _fetch_current_standards_version() -> str:
     than a stale hardcoded value.
     """
     try:
-        with urlopen(_STANDARDS_VERSION_URL, timeout=10) as resp:
+        _timeout = int(os.environ.get("EVALUATOR_HTTP_TIMEOUT_SECONDS", "10"))
+        with urlopen(_STANDARDS_VERSION_URL, timeout=_timeout) as resp:
             data = json.loads(resp.read())
         version = data.get("version") if isinstance(data, dict) else None
         if isinstance(version, str) and version.strip():

@@ -61,13 +61,15 @@ def _on_completion(flow, flow_run, state) -> None:
     if not url:
         return
     with suppress(Exception):
-        urllib.request.urlopen(url, timeout=10)
+        _timeout = int(os.environ.get("EVALUATOR_HEALTHCHECK_TIMEOUT_SECONDS", "10"))
+        urllib.request.urlopen(url, timeout=_timeout)
 
 
 def _fetch_yaml(url: str) -> dict:
     """Fetch and parse a YAML file from a URL. Never raises — returns {} on failure."""
+    timeout = float(os.environ.get("EVALUATOR_HTTP_TIMEOUT_SECONDS", "20"))
     try:
-        r = httpx.get(url, timeout=20.0)
+        r = httpx.get(url, timeout=timeout)
         r.raise_for_status()
         return yaml.safe_load(r.text) or {}
     except Exception as exc:
@@ -78,7 +80,8 @@ def _fetch_yaml(url: str) -> dict:
 def _get_standards_version() -> str:
     """Fetch current standards version from live package.json. Raises on failure."""
     try:
-        r = httpx.get(_STANDARDS_VERSION_URL, timeout=20.0)
+        timeout = float(os.environ.get("EVALUATOR_HTTP_TIMEOUT_SECONDS", "20"))
+        r = httpx.get(_STANDARDS_VERSION_URL, timeout=timeout)
         r.raise_for_status()
         data = json.loads(r.text) or {}
         version = data.get("version")
@@ -274,7 +277,8 @@ def _download_repo(repo_id: str, tmp_dir: str) -> Path | None:
     dest = Path(tmp_dir) / repo_id
 
     try:
-        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+        timeout = float(os.environ.get("EVALUATOR_CLONE_TIMEOUT_SECONDS", "60"))
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             r = client.get(url, headers=headers)
             r.raise_for_status()
             content = r.content  # capture before client context closes
@@ -761,7 +765,6 @@ def conformance_check_flow(run_llm: bool = False) -> None:
 
                 for service in services:
                     repo_id = service.get("id", "")
-                    monorepo_path = str(service.get("monorepo_path") or "")
                     if not repo_id:
                         continue
                     if repo_id in seen_repo_ids:
@@ -773,133 +776,142 @@ def conformance_check_flow(run_llm: bool = False) -> None:
                         continue
                     seen_repo_ids.add(repo_id)
 
-                    repo_path = (
-                        monorepo_root / monorepo_path
-                        if monorepo_path
-                        else monorepo_root
-                    )
-
-                    if not repo_path.is_dir():
-                        prefect_log.warning(
-                            "%s: monorepo_path '%s' not found in %s for %s",
-                            flow_label,
-                            monorepo_path,
-                            mono_id,
-                            repo_id,
+                    try:
+                        monorepo_path = str(service.get("monorepo_path") or "")
+                        repo_path = (
+                            monorepo_root / monorepo_path
+                            if monorepo_path
+                            else monorepo_root
                         )
-                        continue
 
-                    prefect_log.info(
-                        "%s: processing monorepo app %s at %s",
-                        flow_label,
-                        repo_id,
-                        monorepo_path,
-                    )
-
-                    service_type = service.get("type", "worker")
-                    _raw_language = str(service.get("language") or "typescript")
-                    language = (
-                        "typescript" if _raw_language == "astro" else _raw_language
-                    )
-                    cog_subtype = str(service.get("cog_subtype") or "").strip() or None
-                    dod_type = service.get("dod_type")
-                    raw_exc = service.get("check_exceptions") or []
-                    check_exceptions, exception_reasons = _parse_check_exceptions(
-                        raw_exc
-                    )
-                    standards_rules = (
-                        _fetch_standards_for_service(service) if run_llm else []
-                    )
-
-                    if run_llm:
-                        try:
-                            # Load evaluator.yaml for this app, mirroring the
-                            # deterministic branch below. Monorepo root takes
-                            # precedence; fall back to app path if absent.
-                            _check_root = monorepo_root
-                            _evaluator_cfg = load_evaluator_config(
-                                _check_root,
-                                fallback_type=service.get("type") or dod_type,
-                                fallback_exceptions=check_exceptions,
-                                fallback_exception_reasons=exception_reasons,
+                        if not repo_path.is_dir():
+                            prefect_log.warning(
+                                "%s: monorepo_path '%s' not found in %s for %s",
+                                flow_label,
+                                monorepo_path,
+                                mono_id,
+                                repo_id,
                             )
-                            if (
-                                monorepo_root
-                                and not (_check_root / "evaluator.yaml").exists()
-                            ):
+                            continue
+
+                        prefect_log.info(
+                            "%s: processing monorepo app %s at %s",
+                            flow_label,
+                            repo_id,
+                            monorepo_path,
+                        )
+
+                        service_type = service.get("type", "worker")
+                        _raw_language = str(service.get("language") or "typescript")
+                        language = (
+                            "typescript" if _raw_language == "astro" else _raw_language
+                        )
+                        cog_subtype = (
+                            str(service.get("cog_subtype") or "").strip() or None
+                        )
+                        dod_type = service.get("dod_type")
+                        raw_exc = service.get("check_exceptions") or []
+                        check_exceptions, exception_reasons = _parse_check_exceptions(
+                            raw_exc
+                        )
+                        standards_rules = (
+                            _fetch_standards_for_service(service) if run_llm else []
+                        )
+
+                        if run_llm:
+                            try:
+                                _check_root = monorepo_root
                                 _evaluator_cfg = load_evaluator_config(
-                                    repo_path,
+                                    _check_root,
                                     fallback_type=service.get("type") or dod_type,
                                     fallback_exceptions=check_exceptions,
                                     fallback_exception_reasons=exception_reasons,
                                 )
-                            run_conformance_check(
-                                repo_id=repo_id,
-                                repo_path=repo_path,
-                                standards_version=standards_version,
-                                service_type=service_type,
-                                dod_type=dod_type,
-                                language=language,
-                                cog_subtype=cog_subtype,
-                                check_exceptions=check_exceptions,
-                                exception_reasons=exception_reasons,
-                                standards_rules=standards_rules,
-                                run_id=run_id,
-                                monorepo_root=monorepo_root,
-                                workspace_package_json_text=workspace_package_json_text,
-                                monorepo_context=monorepo_context,
-                                post=True,
-                                post_llm_only=True,
-                                evaluator_config=_evaluator_cfg,
-                            )
-                            prefect_log.info(
-                                "conformance: posted LLM findings for monorepo app %s",
-                                repo_id,
-                            )
-                        except Exception as exc:
-                            prefect_log.warning(
-                                "conformance: check failed for monorepo app %s: %s",
-                                repo_id,
-                                exc,
-                            )
-                    else:
-                        try:
-                            check_root = monorepo_root
-                            evaluator_cfg = load_evaluator_config(
-                                check_root,
-                                fallback_type=service.get("type") or dod_type,
-                                fallback_exceptions=check_exceptions,
-                                fallback_exception_reasons=exception_reasons,
-                            )
-                            if (
-                                monorepo_root
-                                and not (check_root / "evaluator.yaml").exists()
-                            ):
+                                if (
+                                    monorepo_root
+                                    and not (_check_root / "evaluator.yaml").exists()
+                                ):
+                                    _evaluator_cfg = load_evaluator_config(
+                                        repo_path,
+                                        fallback_type=service.get("type") or dod_type,
+                                        fallback_exceptions=check_exceptions,
+                                        fallback_exception_reasons=exception_reasons,
+                                    )
+                                run_conformance_check(
+                                    repo_id=repo_id,
+                                    repo_path=repo_path,
+                                    standards_version=standards_version,
+                                    service_type=service_type,
+                                    dod_type=dod_type,
+                                    language=language,
+                                    cog_subtype=cog_subtype,
+                                    check_exceptions=check_exceptions,
+                                    exception_reasons=exception_reasons,
+                                    standards_rules=standards_rules,
+                                    run_id=run_id,
+                                    monorepo_root=monorepo_root,
+                                    workspace_package_json_text=workspace_package_json_text,
+                                    monorepo_context=monorepo_context,
+                                    post=True,
+                                    post_llm_only=True,
+                                    evaluator_config=_evaluator_cfg,
+                                )
+                                prefect_log.info(
+                                    "conformance: posted LLM findings for monorepo app %s",
+                                    repo_id,
+                                )
+                            except Exception as exc:
+                                prefect_log.warning(
+                                    "conformance: check failed for monorepo app %s: %s",
+                                    repo_id,
+                                    exc,
+                                )
+                        else:
+                            try:
+                                check_root = monorepo_root
                                 evaluator_cfg = load_evaluator_config(
-                                    repo_path,
+                                    check_root,
                                     fallback_type=service.get("type") or dod_type,
                                     fallback_exceptions=check_exceptions,
                                     fallback_exception_reasons=exception_reasons,
                                 )
-                            result = run_all_checks(
-                                repo_path,
-                                language=language,
-                                service_type=service_type,
-                                dod_type=dod_type,
-                                cog_subtype=cog_subtype,
-                                check_exceptions=check_exceptions,
-                                exception_reasons=exception_reasons,
-                                monorepo_root=monorepo_root,
-                                workspace_package_json_text=workspace_package_json_text,
-                                evaluator_config=evaluator_cfg,
-                            )
-                            findings_by_service[repo_id] = result.findings
-                        except Exception as exc:
-                            prefect_log.warning(
-                                "deterministic: check failed for monorepo app %s: %s",
-                                repo_id,
-                                exc,
-                            )
+                                if (
+                                    monorepo_root
+                                    and not (check_root / "evaluator.yaml").exists()
+                                ):
+                                    evaluator_cfg = load_evaluator_config(
+                                        repo_path,
+                                        fallback_type=service.get("type") or dod_type,
+                                        fallback_exceptions=check_exceptions,
+                                        fallback_exception_reasons=exception_reasons,
+                                    )
+                                result = run_all_checks(
+                                    repo_path,
+                                    language=language,
+                                    service_type=service_type,
+                                    dod_type=dod_type,
+                                    cog_subtype=cog_subtype,
+                                    check_exceptions=check_exceptions,
+                                    exception_reasons=exception_reasons,
+                                    monorepo_root=monorepo_root,
+                                    workspace_package_json_text=workspace_package_json_text,
+                                    evaluator_config=evaluator_cfg,
+                                )
+                                findings_by_service[repo_id] = result.findings
+                            except Exception as exc:
+                                prefect_log.warning(
+                                    "deterministic: check failed for monorepo app %s: %s",
+                                    repo_id,
+                                    exc,
+                                )
+                    except Exception as exc:
+                        prefect_log.error(
+                            "%s: unhandled error processing monorepo app %s — skipping: %s",
+                            flow_label,
+                            repo_id,
+                            exc,
+                            exc_info=True,
+                        )
 
                 if not run_llm:
                     if len(findings_by_service) > 1:

@@ -328,6 +328,25 @@ def test_pipe005_skips_literal_only_files_delete_pattern(tmp_path: Path) -> None
     assert check_inputs_not_deleted(tmp_path) == []
 
 
+def test_pipe_005_ignores_trashed_inside_string_literal(tmp_path: Path) -> None:
+    """PIPE-005: 'trashed' inside a string literal must not trigger the check.
+
+    Regression: the `trashed` branch previously lacked the
+    _is_inside_string_literal guard that the `delete(` branch already had,
+    so the checker self-flagged when scanning its own source.
+    """
+    _write(
+        tmp_path,
+        "src/checker.py",
+        "def check():\n"
+        '    """This function looks for files().update({\\"trashed\\": true})."""\n'
+        '    marker = "trashed"\n'
+        "    return marker\n",
+    )
+    findings = check_inputs_not_deleted(tmp_path)
+    assert all(f.get("rule_id") != "PIPE-005" for f in findings)
+
+
 # --- TEST-007 -----------------------------------------------------------------
 
 
@@ -473,6 +492,49 @@ def test_test_011_still_flags_unverified_mock(tmp_path: Path) -> None:
     )
     findings = check_mock_assertions(tmp_path)
     assert len(findings) == 1
+
+
+def test_test_011_ignores_test_def_inside_string_literal(tmp_path: Path) -> None:
+    """TEST-011: 'def test_X():' text inside a string literal must not be scanned.
+
+    Regression: the checker previously regex-matched `def test_a():` text
+    embedded in a string passed to write_text() and falsely flagged it as
+    an unverified-mock test. Fixed by switching to AST-based scanning.
+    """
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    # A real test that just writes fixture source text — the fixture text
+    # contains `def test_a():` with MagicMock and no assertions, but
+    # because it's inside a string, it's not a real test.
+    (tests_dir / "test_x.py").write_text(
+        "def test_real(tmp_path):\n"
+        "    src = (\n"
+        '        "from unittest.mock import MagicMock\\n"\n'
+        '        "def test_a():\\n"\n'
+        '        "    m = MagicMock()\\n"\n'
+        '        "    m.do()\\n"\n'
+        "    )\n"
+        '    (tmp_path / "f.py").write_text(src)\n'
+        '    assert (tmp_path / "f.py").exists()\n'
+    )
+    findings = check_mock_assertions(tmp_path)
+    assert findings == []
+
+
+def test_test_011_handles_unparseable_test_file_gracefully(tmp_path: Path) -> None:
+    """TEST-011: a syntactically broken test file should not crash the check."""
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_broken.py").write_text(
+        "def test_a(:  # intentional syntax error\n"
+    )
+    # Must not raise.
+    findings = check_mock_assertions(tmp_path)
+    assert findings == []
 
 
 # --- PIPE-006 -----------------------------------------------------------------

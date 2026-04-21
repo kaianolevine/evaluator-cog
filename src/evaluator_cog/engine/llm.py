@@ -43,6 +43,8 @@ def _anthropic_messages_create(
     Makes a synchronous HTTP POST to /v1/messages with the given model and prompt.
     Raises httpx.HTTPStatusError on non-2xx responses.
     """
+    import os
+
     import httpx
 
     url = "https://api.anthropic.com/v1/messages"
@@ -56,7 +58,8 @@ def _anthropic_messages_create(
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": user_prompt}],
     }
-    with httpx.Client(timeout=120.0) as client:
+    _llm_timeout = float(os.environ.get("EVALUATOR_LLM_TIMEOUT_SECONDS", "120"))
+    with httpx.Client(timeout=_llm_timeout) as client:
         r = client.post(url, headers=headers, json=body)
         r.raise_for_status()
         data = r.json()
