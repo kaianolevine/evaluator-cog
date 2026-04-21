@@ -29,7 +29,9 @@ class ConformanceResult(BaseModel):
 
     repo_id: str = Field(description="Ecosystem repo ID.")
     standards_version: str = Field(description="Standards version evaluated against.")
-    findings: list[Finding] = Field(default_factory=list, description = 'TODO: describe this field.')
+    findings: list[Finding] = Field(
+        default_factory=list, description="TODO: describe this field."
+    )
     deterministic_count: int = Field(
         default=0, description="Number of deterministic findings."
     )
