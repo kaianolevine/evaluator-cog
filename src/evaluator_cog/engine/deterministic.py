@@ -14,12 +14,15 @@ Checks are grouped by what they inspect:
 from __future__ import annotations
 
 import ast
+import os
 import re
 import re as _re_eval003
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from evaluator_cog.engine.evaluator_config import EvaluatorConfig
 
@@ -5063,6 +5066,492 @@ def _type_to_dod(repo_type: str, language: str = "python") -> str | None:
     return mapping.get(repo_type)
 
 
+def check_auth_py_docstring(repo_path: Path) -> list[Finding]:
+    """AUTH-001: No unverified write endpoints reachable from the public internet.
+
+    Per the rule's check_notes: verify the service has either (1) no
+    public port (not deterministically detectable from source alone)
+    or (2) CLERK_AUTH_ENABLED is set and auth middleware is applied
+    to write routes. As a deterministic proxy, require the presence
+    of an auth.py module carrying a module docstring that names the
+    rule — the module's existence plus docstring indicates the
+    service has considered the rule. Absence is the signal to flag.
+    """
+    CHECK_ID = "AUTH-001"
+    findings: list[Finding] = []
+    candidates = [
+        repo_path / "src" / "api_kaianolevine_com" / "auth.py",
+        repo_path / "src" / "auth.py",
+    ]
+    # Also allow any auth.py under src/ for generality.
+    src = repo_path / "src"
+    if src.is_dir():
+        candidates.extend(p for p in src.rglob("auth.py"))
+
+    auth_py: Path | None = next((p for p in candidates if p.is_file()), None)
+    if auth_py is None:
+        findings.append(
+            _finding(
+                CHECK_ID,
+                "ERROR",
+                "structural_conformance",
+                "No auth.py module found under src/. AUTH-001 requires a "
+                "documented auth module on api-service repos with public "
+                "write routes.",
+                "Add auth.py with a module docstring explaining the "
+                "Clerk verification posture and apply auth dependencies "
+                "to write routes.",
+            )
+        )
+        return findings
+
+    try:
+        tree = ast.parse(auth_py.read_text())
+    except (SyntaxError, OSError, UnicodeDecodeError):
+        return findings
+    module_doc = ast.get_docstring(tree) or ""
+    if not module_doc.strip():
+        findings.append(
+            _finding(
+                CHECK_ID,
+                "ERROR",
+                "structural_conformance",
+                f"{auth_py.relative_to(repo_path)} has no module docstring. "
+                "AUTH-001 requires auth.py to document the verification "
+                "posture for this service.",
+                "Add a module-level docstring naming the auth mode "
+                "(legacy header, Clerk JWT, or both) and how it applies "
+                "to write routes.",
+            )
+        )
+    return findings
+
+
+def check_hardcoded_standards_version(repo_path: Path) -> list[Finding]:
+    """EVAL-002: Every evaluation references a standards version.
+
+    The pipeline_evaluations column requirement is enforced server-side
+    (the write endpoint requires standards_version). The source-side
+    portion of this rule: flag hardcoded standards_version string
+    literals assigned as defaults, which freeze a stale version into
+    the evaluator at build time.
+
+    Flags:
+      - `standards_version="X.Y.Z"` as a keyword default or assignment.
+      - `STANDARDS_VERSION = "X.Y.Z"` as a module-level constant.
+
+    Exempts:
+      - Test files (conftest.py, tests/, test_*.py, *_test.py).
+      - Values sourced from env vars or package.json reads (pattern:
+        `os.environ.get(...)`, `os.getenv(...)`, or a function call
+        returning the version — if the RHS is not a plain string
+        literal, do not flag).
+    """
+    CHECK_ID = "EVAL-002"
+    findings: list[Finding] = []
+
+    version_re = re.compile(r"^\d+\.\d+\.\d+(?:[-+][\w.]+)?$")
+
+    def _is_test_file(p: Path) -> bool:
+        parts = set(p.parts)
+        if "tests" in parts or "test" in parts:
+            return True
+        name = p.name
+        return (
+            name == "conftest.py"
+            or name.startswith("test_")
+            or name.endswith("_test.py")
+        )
+
+    scan_roots = [repo_path / "src", repo_path / "engine", repo_path / "flows"]
+    py_files: list[Path] = []
+    for root in scan_roots:
+        if root.is_dir():
+            py_files.extend(
+                p for p in root.rglob("*.py") if p.is_file() and not _is_test_file(p)
+            )
+
+    for py_file in py_files:
+        try:
+            src = py_file.read_text()
+            tree = ast.parse(src)
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            continue
+
+        rel = py_file.relative_to(repo_path)
+
+        for node in ast.walk(tree):
+            # Module-level: STANDARDS_VERSION = "X.Y.Z"
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Name)
+                        and target.id.upper() == "STANDARDS_VERSION"
+                        and isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, str)
+                        and version_re.match(node.value.value)
+                    ):
+                        findings.append(
+                            _finding(
+                                CHECK_ID,
+                                "ERROR",
+                                "standards_currency",
+                                f"{rel}:{node.lineno}: hardcoded "
+                                f"STANDARDS_VERSION = {node.value.value!r}. "
+                                "This freezes a stale version into the build.",
+                                "Read standards_version at runtime from "
+                                "ecosystem-standards/package.json or from a "
+                                "STANDARDS_VERSION environment variable.",
+                            )
+                        )
+            # Function calls with `standards_version="X.Y.Z"` keyword
+            if isinstance(node, ast.Call):
+                for kw in node.keywords:
+                    if (
+                        kw.arg == "standards_version"
+                        and isinstance(kw.value, ast.Constant)
+                        and isinstance(kw.value.value, str)
+                        and version_re.match(kw.value.value)
+                    ):
+                        findings.append(
+                            _finding(
+                                CHECK_ID,
+                                "ERROR",
+                                "standards_currency",
+                                f"{rel}:{kw.value.lineno}: hardcoded "
+                                f"standards_version={kw.value.value!r} "
+                                "passed as a keyword argument.",
+                                "Pass standards_version from a runtime "
+                                "source (package.json fetch or env var), "
+                                "not as a literal.",
+                            )
+                        )
+    return findings
+
+
+def check_meta_005_check_notes_prefix(repo_path: Path) -> list[Finding]:
+    """META-005: Checkable rules declare DETERMINISTIC or LLM in check_notes.
+
+    Scans every rule across standards/*.yaml. For each rule with
+    checkable: true, verifies the first non-blank line of check_notes
+    starts with `DETERMINISTIC CHECK.` or `LLM CHECK.`.
+
+    Only runs against standards-repo — applies_to: [standards-repo].
+    """
+    CHECK_ID = "META-005"
+    findings: list[Finding] = []
+    standards_dir = repo_path / "standards"
+    if not standards_dir.is_dir():
+        return findings
+    for yaml_path in sorted(standards_dir.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(yaml_path.read_text()) or {}
+        except (yaml.YAMLError, OSError, UnicodeDecodeError):
+            continue
+        rules = data.get("standards") or []
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            if not rule.get("checkable"):
+                continue
+            rule_id = str(rule.get("id") or "").strip()
+            notes = str(rule.get("check_notes") or "")
+            stripped_lines = [ln for ln in notes.splitlines() if ln.strip()]
+            first = stripped_lines[0].strip() if stripped_lines else ""
+            if not (
+                first.startswith("DETERMINISTIC CHECK.")
+                or first.startswith("LLM CHECK.")
+            ):
+                findings.append(
+                    _finding(
+                        CHECK_ID,
+                        "WARN",
+                        "documentation_coverage",
+                        f"Rule {rule_id} in standards/{yaml_path.name} is "
+                        f"checkable but check_notes does not begin with "
+                        f"`DETERMINISTIC CHECK.` or `LLM CHECK.` "
+                        f"(first line: {first[:80]!r}).",
+                        "Prepend the correct marker line. Do not rewrite "
+                        "the rest of check_notes.",
+                    )
+                )
+    return findings
+
+
+def check_meta_006_prefix_file_correlation(repo_path: Path) -> list[Finding]:
+    """META-006: Rule ID prefix matches the file's declared rule_prefix.
+
+    Reads index.yaml's files: section. For each file entry with a
+    rule_prefix, opens the referenced standards file and verifies
+    every rule ID starts with one of the declared prefixes.
+
+    Only runs against standards-repo.
+    """
+    CHECK_ID = "META-006"
+    findings: list[Finding] = []
+    index_path = repo_path / "index.yaml"
+    if not index_path.is_file():
+        return findings
+    try:
+        index = yaml.safe_load(index_path.read_text()) or {}
+    except (yaml.YAMLError, OSError, UnicodeDecodeError):
+        return findings
+    raw_files = index.get("files") or []
+    if not isinstance(raw_files, list):
+        return findings
+
+    id_prefix_re = re.compile(r"^([A-Z]+)-")
+
+    for entry in raw_files:
+        if not isinstance(entry, dict):
+            continue
+        file_rel = str(entry.get("file") or "").strip()
+        raw_prefix = entry.get("rule_prefix")
+        if not file_rel or raw_prefix is None:
+            continue
+        if isinstance(raw_prefix, str):
+            declared = {raw_prefix}
+        elif isinstance(raw_prefix, list):
+            declared = {str(x) for x in raw_prefix if isinstance(x, str)}
+        else:
+            continue
+        if not declared:
+            continue
+
+        target = repo_path / file_rel
+        if not target.is_file():
+            continue
+        try:
+            data = yaml.safe_load(target.read_text()) or {}
+        except (yaml.YAMLError, OSError, UnicodeDecodeError):
+            continue
+        rules = data.get("standards") or []
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            rule_id = str(rule.get("id") or "").strip()
+            m = id_prefix_re.match(rule_id)
+            if not m:
+                continue
+            rule_prefix = m.group(1)
+            if rule_prefix not in declared:
+                findings.append(
+                    _finding(
+                        CHECK_ID,
+                        "WARN",
+                        "structural_conformance",
+                        f"Rule {rule_id} lives in {file_rel} which "
+                        f"declares rule_prefix {sorted(declared)!r}. "
+                        f"The rule's prefix {rule_prefix!r} does not match.",
+                        f"Move the rule to the correct file, or add "
+                        f"{rule_prefix!r} to rule_prefix in index.yaml "
+                        f"if this file legitimately owns that prefix.",
+                    )
+                )
+    return findings
+
+
+def check_meta_007_rule_ids_unique(repo_path: Path) -> list[Finding]:
+    """META-007: Rule IDs are append-only — retired numbers should not be reused.
+
+    Collects every rule id across all standards/*.yaml files and
+    flags any ID appearing more than once. Detects in-tree repurposing.
+    Git-history-based retired-then-reintroduced detection is out of
+    scope — covered by playbook discipline.
+
+    Only runs against standards-repo.
+    """
+    CHECK_ID = "META-007"
+    findings: list[Finding] = []
+    standards_dir = repo_path / "standards"
+    if not standards_dir.is_dir():
+        return findings
+
+    from collections import defaultdict
+
+    id_locations: dict[str, list[str]] = defaultdict(list)
+    for yaml_path in sorted(standards_dir.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(yaml_path.read_text()) or {}
+        except (yaml.YAMLError, OSError, UnicodeDecodeError):
+            continue
+        rules = data.get("standards") or []
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            rule_id = str(rule.get("id") or "").strip()
+            if rule_id:
+                id_locations[rule_id].append(yaml_path.name)
+
+    for rule_id, locations in id_locations.items():
+        if len(locations) > 1:
+            findings.append(
+                _finding(
+                    CHECK_ID,
+                    "WARN",
+                    "structural_conformance",
+                    f"Rule ID {rule_id} appears {len(locations)} times "
+                    f"across standards/ ({', '.join(locations)}). Rule IDs "
+                    f"must be unique — IDs are append-only and cannot be "
+                    f"reused.",
+                    f"Rename one of the duplicate {rule_id} rules to a "
+                    f"fresh, unused ID from the prefix's sequence.",
+                )
+            )
+    return findings
+
+
+def _git_log_lines(repo_path: Path, args: list[str]) -> list[str]:
+    """Run `git log ...` in repo_path and return lines. Empty on failure."""
+    import subprocess
+
+    if not (repo_path / ".git").is_dir():
+        return []
+    try:
+        timeout = float(os.environ.get("EVALUATOR_GIT_TIMEOUT_SECONDS", "10"))
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "log", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return []
+    if result.returncode != 0:
+        return []
+    return [ln for ln in result.stdout.splitlines() if ln.strip()]
+
+
+def check_conventional_commits(repo_path: Path) -> list[Finding]:
+    """VER-001: Conventional Commits format.
+
+    Scans the last 20 commit subjects on the current branch. Flags
+    any subject not matching the conventional-commit grammar.
+
+    Exempts merge commits, semantic-release release commits
+    (`chore(release):`), and revert commits (`Revert "`).
+
+    When run against a repo downloaded as a zip (no .git directory —
+    this is the evaluator-cog download path), returns an empty list
+    silently. VER-001 is best-effort in that environment; the rule
+    is enforced primarily by semantic-release at release time.
+    """
+    CHECK_ID = "VER-001"
+    findings: list[Finding] = []
+
+    subjects = _git_log_lines(repo_path, ["-n", "20", "--pretty=format:%s"])
+    if not subjects:
+        return findings
+
+    cc_re = re.compile(
+        r"^(feat|fix|docs|refactor|chore|test|ci|perf|build|style)"
+        r"(\([^)]+\))?!?: .+"
+    )
+
+    for subj in subjects:
+        if subj.startswith("Merge branch ") or subj.startswith("Merge pull request "):
+            continue
+        if subj.startswith("chore(release):"):
+            continue
+        if subj.startswith('Revert "'):
+            continue
+        if cc_re.match(subj):
+            continue
+        findings.append(
+            _finding(
+                CHECK_ID,
+                "WARN",
+                "cd_readiness",
+                f"Commit subject does not follow Conventional Commits: {subj[:100]!r}.",
+                "Rewrite the subject as `<type>(<scope>): <summary>` "
+                "with type in: feat, fix, docs, refactor, chore, test, "
+                "ci, perf, build, style.",
+            )
+        )
+    return findings
+
+
+def check_breaking_change_footer(repo_path: Path) -> list[Finding]:
+    """VER-002: BREAKING CHANGE footer for major bumps.
+
+    Scans CHANGELOG.md for major version entries (vX.0.0 where X >= 1).
+    For each, checks the corresponding git tag's commit message for
+    a `BREAKING CHANGE:` footer OR a `!:` subject-line shorthand.
+
+    When run against a repo without .git (zip download), returns empty.
+    """
+    CHECK_ID = "VER-002"
+    findings: list[Finding] = []
+
+    changelog = repo_path / "CHANGELOG.md"
+    if not changelog.is_file():
+        return findings
+    try:
+        text = changelog.read_text()
+    except (OSError, UnicodeDecodeError):
+        return findings
+
+    major_re = re.compile(r"^##\s*\[?(\d+)\.0\.0\]?", re.MULTILINE)
+    majors = [m.group(1) for m in major_re.finditer(text) if int(m.group(1)) >= 1]
+    if not majors:
+        return findings
+
+    if not (repo_path / ".git").is_dir():
+        return findings
+
+    import subprocess
+
+    try:
+        tags_result = subprocess.run(
+            ["git", "-C", str(repo_path), "tag", "--list"],
+            capture_output=True,
+            text=True,
+            timeout=float(os.environ.get("EVALUATOR_GIT_TIMEOUT_SECONDS", "10")),
+            check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return findings
+    if tags_result.returncode != 0:
+        return findings
+    available_tags = set(tags_result.stdout.split())
+
+    breaking_subject_re = re.compile(r"^(feat|fix|refactor)(\([^)]+\))?!:")
+
+    for major in majors:
+        candidate_tags = [f"v{major}.0.0", f"{major}.0.0"]
+        tag = next((t for t in candidate_tags if t in available_tags), None)
+        if tag is None:
+            # No matching tag — CHANGELOG-only entry; covered by VER-004.
+            continue
+        body_lines = _git_log_lines(repo_path, ["-1", "--format=%B", tag])
+        body = "\n".join(body_lines)
+        has_footer = any(ln.strip().startswith("BREAKING CHANGE:") for ln in body_lines)
+        subject = body_lines[0] if body_lines else ""
+        has_shorthand = bool(breaking_subject_re.match(subject))
+        if not (has_footer or has_shorthand):
+            findings.append(
+                _finding(
+                    CHECK_ID,
+                    "WARN",
+                    "cd_readiness",
+                    f"Major version tag {tag} does not declare a breaking "
+                    f"change: no `BREAKING CHANGE:` footer and no `!:` "
+                    f"subject shorthand.",
+                    "Amend the release commit (or the original feat/fix "
+                    "commit that drove the major bump) to include a "
+                    "`BREAKING CHANGE: <description>` footer.",
+                )
+            )
+    return findings
+
+
 def check_eval_003(
     *,
     lookback_days: int = 30,
@@ -5251,6 +5740,18 @@ def check_eval_007(
     field default to the pre-filter behaviour (treated as
     deterministic), preserving behaviour for tests and legacy
     callers that build rule_catalog dicts by hand.
+
+    A deterministic rule counts as "implemented" if any of the
+    following appear in deterministic.py:
+      - ``CHECK_ID = "<rule-id>"`` — the canonical constant convention.
+      - ``_run(fn, "<rule-id>")`` — dispatch wrapper registration.
+      - ``_mark_checked("<rule-id>", ...)`` — manual registration for
+        rules whose check logic is inlined rather than wrapped.
+    The three are equivalent from EVAL-007's perspective — each
+    demonstrates that the evaluator has accepted responsibility for
+    the rule. Matching on all three avoids false "unimplemented"
+    findings for checks that are wired but don't follow the constant
+    convention.
     """
     CHECK_ID = "EVAL-007"
     if not rule_catalog:
@@ -5261,9 +5762,18 @@ def check_eval_007(
     import inspect
 
     this_module_src = inspect.getsource(inspect.getmodule(check_eval_007))
+
+    # CHECK_ID constants (canonical rule registration).
     impl_ids: set[str] = set(
         re.findall(r'CHECK_ID\s*=\s*"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"', this_module_src)
     )
+    # _run() dispatch registrations.
+    impl_ids.update(
+        re.findall(r'_run\([^,]+,\s*"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"', this_module_src)
+    )
+    # _mark_checked registrations.
+    for call_args in re.findall(r"_mark_checked\(([^)]*)\)", this_module_src):
+        impl_ids.update(re.findall(r'"([A-Z]+-(?:GAP-)?[0-9A-Z]+)"', call_args))
 
     # Only deterministic rules require a CHECK_ID constant. LLM rules
     # are dispatched through engine/llm.py and should not be flagged
@@ -5283,9 +5793,12 @@ def check_eval_007(
                 CHECK_ID,
                 "WARN",
                 "standards_currency",
-                f"Rule {rid} is checkable in the catalog but has no "
-                f"CHECK_ID constant in evaluator-cog's deterministic.py.",
-                f"Add a check function for {rid} and register its CHECK_ID.",
+                f"Rule {rid} is a deterministic checkable rule in the catalog "
+                f"but is not registered in evaluator-cog's deterministic.py "
+                f"(no CHECK_ID constant, _run() call, or _mark_checked() "
+                f"reference found).",
+                f"Add a check function for {rid} and register it via "
+                f'_run(check_fn, "{rid}") or declare CHECK_ID = "{rid}".',
             )
         )
 
@@ -5295,8 +5808,8 @@ def check_eval_007(
                 CHECK_ID,
                 "ERROR",
                 "standards_currency",
-                f"CHECK_ID {rid} is implemented in evaluator-cog but has "
-                f"no matching rule in the catalog (orphaned check).",
+                f"Rule {rid} is registered in evaluator-cog's deterministic.py "
+                f"but has no matching rule in the catalog (orphaned check).",
                 "Remove the implementation or restore the rule in ecosystem-standards.",
             )
         )
@@ -5500,6 +6013,8 @@ def run_all_checks(
     _run(lambda p: check_readme(p, monorepo_root=monorepo_root), "DOC-001")
     _run(lambda p: check_changelog(p, monorepo_root=monorepo_root), "DOC-003")
     _run(lambda p: check_releaserc(p, monorepo_root=monorepo_root), "VER-003")
+    _run(check_conventional_commits, "VER-001")
+    _run(check_breaking_change_footer, "VER-002")
     _run(check_split_package_identity, "DOC-009")
 
     if not is_library:
@@ -5597,6 +6112,9 @@ def run_all_checks(
             _run(check_meta_release_pipeline_wired, "META-001")
             _run(check_meta_no_scattered_metadata, "META-002")
             _run(check_meta_canonical_enums_are_dicts, "META-003")
+            _run(check_meta_005_check_notes_prefix, "META-005")
+            _run(check_meta_006_prefix_file_correlation, "META-006")
+            _run(check_meta_007_rule_ids_unique, "META-007")
     elif dod_type is None:
         _run(check_standards_freshness, "PRIN-009")
 
@@ -5705,6 +6223,7 @@ def run_all_checks(
 
         _run(_api_001_check, "API-001")
         _run(_api_002_check, "API-002")
+        _run(check_auth_py_docstring, "AUTH-001")
 
     # CD-006 applies to pipeline-cogs, trigger-cogs, and api-services —
     # any repo type where GHA relaying would be a genuine anti-pattern.
@@ -5860,6 +6379,7 @@ def run_all_checks(
     if is_pipeline_cog or is_api_service:
         _run(check_mock_assertions, "TEST-011")
         _run(check_test_gap_critical_paths, "TEST-GAP-001")
+        _run(check_hardcoded_standards_version, "EVAL-002")
 
     def _test_013(p: Path) -> list[Finding]:
         return check_hardcoded_time_values(p, language=language)

@@ -1593,7 +1593,7 @@ def test_check_eval_007_flags_unimplemented_rules() -> None:
     assert any(
         f["rule_id"] == "EVAL-007"
         and "MADE-UP-999" in f["finding"]
-        and "no CHECK_ID constant" in f["finding"]
+        and "not registered" in f["finding"]
         for f in findings
     )
 
