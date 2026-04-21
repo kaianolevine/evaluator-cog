@@ -1,3 +1,10 @@
+# [3.13.0](https://github.com/mini-app-polis/evaluator-cog/compare/v3.12.3...v3.13.0) (2026-04-21)
+
+
+### Features
+
+* refactor deterministic to many modules ([ae3bd68](https://github.com/mini-app-polis/evaluator-cog/commit/ae3bd685bf863294002f5c38e112235090c7a669))
+
 ## [3.12.3](https://github.com/mini-app-polis/evaluator-cog/compare/v3.12.2...v3.12.3) (2026-04-21)
 
 
