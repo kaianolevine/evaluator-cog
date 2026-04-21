@@ -45,7 +45,10 @@ select = ["E","W","F","I","B","C4","UP","ARG","SIM"]
 ignore = ["E501","B008","ARG001"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/evaluator_cog/engine/deterministic.py" = ["F841"]
+# CHECK_ID = "..." is a documentation convention in every check function —
+# it names the rule the function implements even when the literal is inlined
+# elsewhere in the body. Keep it, silence F841.
+"src/evaluator_cog/engine/deterministic/*.py" = ["F841"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["evaluator_cog"]

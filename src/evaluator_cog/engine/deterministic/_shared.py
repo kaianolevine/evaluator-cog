@@ -1,0 +1,91 @@
+"""Shared types and helpers used across the deterministic check modules."""
+
+from __future__ import annotations
+
+import ast
+from dataclasses import dataclass
+from typing import Any
+
+Finding = dict[str, Any]
+
+
+@dataclass
+class CheckResult:
+    """Return value of run_all_checks.
+
+    Carries both the list of findings produced by the run and the set of
+    rule IDs the deterministic engine actually exercised. The LLM pass
+    uses `checked_rule_ids` to suppress soft-rule assessment of rules
+    already covered deterministically.
+    """
+
+    findings: list[Finding]
+    checked_rule_ids: set[str]
+
+
+def _finding(
+    rule_id: str,
+    severity: str,
+    dimension: str,
+    finding: str,
+    suggestion: str = "",
+) -> Finding:
+    return {
+        "rule_id": rule_id,
+        "violation_id": rule_id or None,
+        "severity": severity,
+        "dimension": dimension,
+        "finding": finding,
+        "suggestion": suggestion,
+    }
+
+
+def _ast_constant_is_dict_key(const: ast.Constant, tree: ast.AST) -> bool:
+    """True if this Constant is the key expression of a dict display."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict) and const in node.keys:
+            return True
+    return False
+
+
+def _is_inside_string_literal(source: str, match_substring: str) -> bool:
+    """Return True if every occurrence of match_substring in source sits
+    inside a Python string literal.
+
+    Used by checkers that scan Python files with substring containment
+    (e.g. ``if "X-Internal-API-Key" in text``). When the scanned file is
+    the checker itself — or a test fixture containing source snippets
+    built as string literals — every match is a self-scan artifact, not
+    a real occurrence.
+
+    Implementation: parse ``source`` with ast.parse(). If parsing fails,
+    return False (conservative — let the caller flag). Walk the AST for
+    ast.Constant nodes whose .value is a str containing match_substring.
+    Dict literal keys are excluded — ``{{"X-Internal-API-Key": "x"}}`` is
+    real usage, not a quoted pattern string.
+
+    Count how many times match_substring appears in total (plain
+    source.count(match_substring)) vs. how many times it appears inside
+    counted string-literal Constant nodes. If every occurrence is inside
+    a string literal, return True; otherwise return False.
+
+    Caveat: this handles the common case of bare string literals. It
+    does NOT try to reason about f-strings, concatenated literals, or
+    triple-quoted docstrings beyond what ast represents — ast.Constant
+    already covers those correctly for our purposes.
+    """
+    if match_substring not in source:
+        return False
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    literal_hits = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if _ast_constant_is_dict_key(node, tree):
+            continue
+        literal_hits += node.value.count(match_substring)
+    total_hits = source.count(match_substring)
+    return literal_hits >= total_hits

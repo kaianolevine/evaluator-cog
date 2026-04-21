@@ -10,7 +10,22 @@ evaluator-cog/
         pipeline_eval.py    # post-run behavioral evaluation; webhook handler
         conformance.py      # scheduled structural conformance checker
       engine/
-        deterministic.py    # file / AST / YAML rule checks (~40 rules)
+        deterministic/      # file / AST / YAML rule checks (~40 rules), split by domain
+          __init__.py           # re-exports the public surface (run_all_checks + all check_*)
+          _shared.py            # Finding, CheckResult, _finding helper
+          runner.py             # run_all_checks dispatcher + dedup
+          docs.py               # README / CHANGELOG / docstring checks
+          python.py             # pyproject / src-layout / naming
+          versioning.py         # .releaserc / conventional commits / changelog
+          delivery.py           # CI / GHA / logging / secrets / observability
+          pipeline.py           # Prefect flow presence / retry / serve pattern
+          frontend.py           # Astro / Vite-React / Tailwind / shadcn
+          api.py                # FastAPI / Postgres / HTTP API contract
+          auth.py               # Clerk / m2m / unauthenticated-route rules
+          config.py             # env vars / settings / shared-library use
+          testing.py            # TestClient / fixtures / mock / respx
+          meta.py               # META-001..007 — catalog self-checks
+          introspection.py      # EVAL-003, MONO-003, EVAL-007
         llm.py              # soft rule assessment, prompt builders, response parsing
         evaluator_config.py # per-repo evaluator.yaml loader
         api_client.py       # posts findings to api-kaianolevine-com
