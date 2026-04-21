@@ -1,3 +1,19 @@
+## [3.11.7](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.6...v3.11.7) (2026-04-21)
+
+
+### Bug Fixes
+
+* addressing findings from eval report ([ac220b2](https://github.com/mini-app-polis/evaluator-cog/commit/ac220b2b32e738004ad7f32ca764e5a115532dd3))
+* **evaluator:** API-008 honors 'intentionally public' markers in decorator and docstring ([7d5947f](https://github.com/mini-app-polis/evaluator-cog/commit/7d5947f1ca4340b4e4ccd6c8fbdfb7ad9d2255f3))
+* **evaluator:** CD-010 checks language-appropriate observability stack (TS + Python) ([1a478b6](https://github.com/mini-app-polis/evaluator-cog/commit/1a478b6276bcdcbf41b08c87d011ff475a4bb378))
+* **evaluator:** CD-015 accepts `from prefect import serve` pattern ([2fe2714](https://github.com/mini-app-polis/evaluator-cog/commit/2fe2714a72899b47bf372f06c45ea27322c49a08))
+* **evaluator:** filter substring self-scan (CD-012, PIPE-005, TEST-007); relax CD-010 Layer 1 ([00bde0d](https://github.com/mini-app-polis/evaluator-cog/commit/00bde0d4e87ffc3ca8e639a38f3d8522711a2560))
+* **evaluator:** PIPE-006 accepts get_run_logger via repo-local wrapper ([5775cb6](https://github.com/mini-app-polis/evaluator-cog/commit/5775cb64ca75c8fe0f9342b94f38508fea85432a))
+* **evaluator:** TEST-011 accepts .assert_not_called, .call_count, .call_args ([07fd985](https://github.com/mini-app-polis/evaluator-cog/commit/07fd985a8c7b232d08cc7420ea1330893d0c4354))
+* **evaluator:** TEST-013 skips setTimeout in React UI paths (.tsx, src/pages/, etc.) ([4e53e27](https://github.com/mini-app-polis/evaluator-cog/commit/4e53e27782f5b1c03c93934cbf9b4d662f707188))
+* **evaluator:** XSTACK-002 excludes src/test/ and *.test.ts files ([8a4e2dc](https://github.com/mini-app-polis/evaluator-cog/commit/8a4e2dc5388871c86ea6b98f15fadc0e4ff6816b))
+* formatting ([c0fb022](https://github.com/mini-app-polis/evaluator-cog/commit/c0fb022138acc0fc75afcefbbaf9957a61e50857))
+
 ## [3.11.6](https://github.com/mini-app-polis/evaluator-cog/compare/v3.11.5...v3.11.6) (2026-04-20)
 
 
