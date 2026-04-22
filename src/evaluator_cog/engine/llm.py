@@ -432,22 +432,39 @@ Only flag rules where you have genuine positive signal of a problem
   (Sentry absent) or CD-009 (structured logging absent) for the same service.
   CD-010 is the composite rule — its sub-components are implicit. Raising all
   three produces duplicate findings for one root cause.
-- If soft_rules is empty, emit exactly one INFO finding confirming
-  the repo passed all assessed rules
-RESPONSE COUNT RULE: Emit the MINIMUM number of findings needed.
 
-If you have genuine signal for a soft rule: emit ONE finding for it.
-If you have NO signal for a soft rule: do NOT emit anything for it.
-Never emit an INFO finding just to note the absence of a problem.
-When all soft rules are clean: emit exactly ONE INFO summarising
-overall repo health. Do not emit one finding per rule.
+WHAT TO EMIT:
+
+Emit findings ONLY for rules where you have genuine positive
+signal of a problem. Severity is WARN or ERROR for real problems.
+
+DO NOT emit findings in any of these cases:
+  - A soft rule appears clean or passing.
+  - You cannot assess a rule from the provided file inventory,
+    README, and deterministic findings (e.g. rules that require
+    git commit history, rules that require test body contents you
+    cannot see).
+  - A rule does not apply to this repo's shape or dod_type.
+  - You want to note that a rule was considered, or confirm
+    a rule's exemption is documented, or summarise overall health.
+
+The dashboard already surfaces a SUCCESS marker per repo when no
+findings are emitted. Do not emit your own "all clean" summary —
+that produces duplicate acknowledgements and dashboard noise.
+
+If every soft rule is clean or unassessable, emit an empty
+findings array: {{"findings":[]}}. That is the correct response.
 
 Respond with ONLY valid JSON (no markdown) in this exact shape:
-{{"findings":[{{"rule_id":"...","dimension":"structural_conformance","severity":"ERROR|WARN|INFO","finding":"...","suggestion":"..."}}]}}
+{{"findings":[{{"rule_id":"...","dimension":"structural_conformance","severity":"ERROR|WARN","finding":"...","suggestion":"..."}}]}}
 
 Rules:
-- severity must be INFO, WARN, or ERROR (uppercase). CRITICAL and SUCCESS are reserved for emission-only paths (flow crashes, clean-run completion) and must not be used for rule findings.
+- severity must be WARN or ERROR (uppercase). INFO is not used for
+  soft-rule findings — the emission conditions above forbid the
+  cases where INFO would have applied. CRITICAL and SUCCESS are
+  reserved for pipeline-run emission paths and must not be used
+  for rule findings.
 - Reference the rule ID from the standards list above.
 - Keep findings specific and actionable.
-- If all soft rules appear clean, emit a single INFO finding summarising repo health.
+- If every soft rule is clean or unassessable, return {{"findings":[]}}.
 """
