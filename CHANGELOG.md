@@ -1,3 +1,10 @@
+## [3.13.4](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.3...v3.13.4) (2026-04-22)
+
+
+### Bug Fixes
+
+* false positive errors ([86370ae](https://github.com/mini-app-polis/evaluator-cog/commit/86370aea879e41c5e76008a517a473d88a0089c9))
+
 ## [3.13.3](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.2...v3.13.3) (2026-04-22)
 
 
