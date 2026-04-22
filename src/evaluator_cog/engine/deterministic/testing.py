@@ -184,6 +184,12 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
        real thing under test. The test verifies the real thing's output with
        any ``assert`` statement, not the mock itself.
 
+    4. Exception-shape verification — ``with pytest.raises(...):`` /
+       ``pytest.warns(...)`` / unittest's ``assertRaises`` / ``assertWarns``
+       contexts. The raise itself is the verification. Mocks alongside are
+       typically plumbing to reach the failure path, and do not additionally
+       need mock-API verification.
+
     A test that creates a mock but has zero assertions in its body is still
     flagged.
 
@@ -256,6 +262,18 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
     _has_assert_re = re.compile(
         r"^\s*assert\b|\bpytest\.raises\s*\(|\bpytest\.warns\s*\(",
         re.MULTILINE,
+    )
+
+    # Exception-shape verification patterns. A test that wraps the call
+    # under test in ``with pytest.raises(...):`` (or the unittest
+    # ``assertRaises`` / ``assertWarns`` equivalents) is verifying the
+    # behavior of the code under test — the raise itself IS the assertion.
+    # Mocks used alongside such a context are typically plumbing to reach
+    # the failure path, and do not additionally need mock-API verification.
+    _exception_context_re = re.compile(
+        r"\bpytest\.raises\s*\(|\bpytest\.warns\s*\("
+        r"|\bassertRaises\s*\(|\bassertRaisesRegex\s*\("
+        r"|\bassertWarns\s*\(|\bassertWarnsRegex\s*\("
     )
 
     # Self-reference: test body invokes the function under test.
@@ -335,6 +353,8 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
             if _has_capture_list_assertion(body_src):
                 continue
             if _is_behavior_injection_with_assertion(body_src):
+                continue
+            if _exception_context_re.search(body_src):
                 continue
             findings.append(
                 _finding(

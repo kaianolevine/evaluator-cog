@@ -654,6 +654,47 @@ def test_test_011_accepts_pytest_raises_as_verification(tmp_path: Path) -> None:
     assert check_mock_assertions(tmp_path) == []
 
 
+def test_test_011_accepts_pytest_raises_with_bare_mock(tmp_path: Path) -> None:
+    """TEST-011: a bare MagicMock (no side_effect / no return_value) used
+    alongside ``with pytest.raises(...):`` is still accepted — the raises
+    context is the verification. The mock is plumbing to reach the failure
+    path; interrogating it is not additionally required."""
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "import pytest\n"
+        "from unittest.mock import MagicMock\n"
+        "\n"
+        "def test_bad_input_raises():\n"
+        "    fake_client = MagicMock()\n"
+        "    with pytest.raises(ValueError):\n"
+        "        do_something(fake_client, bad_input=None)\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
+
+
+def test_test_011_accepts_unittest_assertraises_with_mock(tmp_path: Path) -> None:
+    """TEST-011: unittest-style ``self.assertRaises(...)`` is also a valid
+    exception-shape assertion."""
+    from evaluator_cog.engine.deterministic import check_mock_assertions
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_x.py").write_text(
+        "import unittest\n"
+        "from unittest.mock import MagicMock\n"
+        "\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_raises(self):\n"
+        "        fake = MagicMock()\n"
+        "        with self.assertRaises(ValueError):\n"
+        "            do_something(fake)\n"
+    )
+    assert check_mock_assertions(tmp_path) == []
+
+
 def test_test_011_still_flags_bare_patch_without_verification(
     tmp_path: Path,
 ) -> None:
