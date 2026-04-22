@@ -1,3 +1,10 @@
+## [3.13.5](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.4...v3.13.5) (2026-04-22)
+
+
+### Bug Fixes
+
+* **evaluator:** stop emitting info findings for trait-exempt and repo-exempt skips ([1c53511](https://github.com/mini-app-polis/evaluator-cog/commit/1c53511be03e70913dc0e28ff7bca5e31d809118))
+
 ## [3.13.4](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.3...v3.13.4) (2026-04-22)
 
 
