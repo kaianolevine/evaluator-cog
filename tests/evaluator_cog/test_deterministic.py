@@ -1711,6 +1711,79 @@ def test_check_eval_003_passes_well_formed_finding() -> None:
     assert findings == []
 
 
+def test_check_eval_003_accepts_concise_but_actionable_remediation() -> None:
+    """Long findings with concise actionable remediation should pass.
+
+    Regression guard for false positives where EVAL-003 required
+    remediation length to be >=50% of finding length.
+    """
+    fake_response = {
+        "data": [
+            {
+                "id": "cc10cd52-ff5e-4808-9ef2-440bb0a1e17c",
+                "rule_id": "EVAL-007",
+                "finding": (
+                    "Rule CD-004 is a deterministic checkable rule in the catalog "
+                    "but is not registered in evaluator-cog's deterministic package "
+                    "(no CHECK_ID constant, _run() call, or _mark_checked() "
+                    "reference found in any module under "
+                    "evaluator_cog/engine/deterministic/)."
+                ),
+                "severity": "WARN",
+                "suggestion": (
+                    "Add a check function for CD-004 and register it via "
+                    '_run(check_fn, "CD-004") or declare CHECK_ID = "CD-004".'
+                ),
+                "standards_version": "4.1.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert findings == []
+
+
+def test_check_eval_003_flags_trivially_short_remediation() -> None:
+    """Very short remediation text should still be flagged."""
+    fake_response = {
+        "data": [
+            {
+                "id": "short-remediation-row",
+                "rule_id": "API-004",
+                "finding": "API routes are missing the required /v1 prefix in several endpoints.",
+                "severity": "WARN",
+                "suggestion": "Fix this.",
+                "standards_version": "4.1.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert any("remediation too short" in f["finding"] for f in findings)
+
+
 def test_check_mono_003_flags_duplicate_sibling_findings() -> None:
     ecosystem = {
         "services": [

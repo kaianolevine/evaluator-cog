@@ -43,8 +43,10 @@ def check_eval_003(
         previous text-regex proxy was flawed because it fired on
         correctly-tagged findings whose text didn't happen to repeat
         the rule ID.
-      - Remediation is non-empty and of reasonable length relative
-        to the finding text.
+      - Remediation is non-empty and not trivially short. We avoid
+        strict proportional checks against finding length because some
+        high-quality findings are naturally verbose while remediation
+        can still be concise and actionable.
 
     Note: the pre-2026-04 ≤60-char length check on finding text was
     removed. Short-but-clear actionable findings like
@@ -129,7 +131,9 @@ def check_eval_003(
             problems.append("finding is not tagged with a rule_id")
         if not remediation:
             problems.append("empty remediation")
-        elif len(remediation) < max(len(text) * 0.5, 40):
+        # Keep a small quality floor for actionable remediation text,
+        # but do not require 1:1 proportionality with long findings.
+        elif len(remediation) < 40:
             problems.append(
                 f"remediation too short ({len(remediation)} chars) "
                 f"vs finding ({len(text)} chars)"
