@@ -275,8 +275,13 @@ def test_run_all_checks_never_raises() -> None:
     assert isinstance(result.checked_rule_ids, set)
 
 
-def test_run_all_checks_structured_exception_emits_info() -> None:
-    """Structured check_exceptions with reasons should emit INFO findings."""
+def test_run_all_checks_structured_exception_emits_no_finding() -> None:
+    """Structured check_exceptions (legacy path, no catalog) should
+    suppress the check entirely — no INFO 'Skipped:' finding is
+    emitted. A rule that does not apply to this repo is simply absent
+    from the report. INFO remains reserved for genuine weak-signal
+    findings from checks that actually ran.
+    """
     repo = _make_repo({})
     result = run_all_checks(
         repo,
@@ -285,12 +290,11 @@ def test_run_all_checks_structured_exception_emits_info() -> None:
         dod_type="new_cog",
     )
     findings = result.findings
-    assert "DOC-001" not in [f["rule_id"] for f in findings if f["severity"] != "INFO"]
-    info_findings = [
-        f for f in findings if f["rule_id"] == "DOC-001" and f["severity"] == "INFO"
-    ]
-    assert len(info_findings) == 1
-    assert "standards repo" in info_findings[0]["finding"]
+    doc_001_findings = [f for f in findings if f["rule_id"] == "DOC-001"]
+    assert doc_001_findings == [], (
+        f"DOC-001 should be fully suppressed by check_exceptions, got: "
+        f"{doc_001_findings}"
+    )
 
 
 def test_run_all_checks_non_python_skips_python_rules() -> None:

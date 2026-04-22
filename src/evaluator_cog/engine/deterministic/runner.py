@@ -273,18 +273,11 @@ def run_all_checks(
 
         if evaluator_config is None:
             # No catalog available → honor explicit legacy exceptions only.
+            # Exemptions (trait or repo-level) emit no finding: "this rule
+            # does not apply here" is not a signal worth reporting on the
+            # dashboard. INFO remains reserved for genuinely noted weak
+            # signals from a check that actually ran.
             if rule_id in _exceptions:
-                reason = (exception_reasons or {}).get(rule_id, "")
-                if reason:
-                    findings.append(
-                        _finding(
-                            rule_id,
-                            "INFO",
-                            "structural_conformance",
-                            f"Skipped: {reason}",
-                            "",
-                        )
-                    )
                 return
             disposition_info_reason = ""
             severity_override: str | None = None
@@ -295,16 +288,10 @@ def run_all_checks(
             rule_meta = (evaluator_config.rule_catalog or {}).get(rule_id, {})
             rule_status = rule_meta.get("status", "")
             if not result.should_run:
-                if result.emits_skip_finding and result.reason:
-                    f = _finding(
-                        rule_id,
-                        "INFO",
-                        "structural_conformance",
-                        f"Skipped: {result.reason}",
-                        "",
-                    )
-                    f["status"] = rule_status
-                    findings.append(f)
+                # SKIP_SCOPE, SKIP_TRAIT_EXEMPT, SKIP_REPO_EXEMPT all fall
+                # through here. None of them emit findings — a rule that
+                # does not apply to this repo shape, or is exempted by
+                # trait/reason, is simply absent from the report.
                 return
             disposition_info_reason = result.reason
             severity_override = (
@@ -407,36 +394,10 @@ def run_all_checks(
                 )
             )
     else:
-        if evaluator_config is None:
-            reason = (exception_reasons or {}).get("XSTACK-001", "")
-            if reason:
-                findings.append(
-                    _finding(
-                        "XSTACK-001",
-                        "INFO",
-                        "structural_conformance",
-                        f"Skipped: {reason}",
-                        "",
-                    )
-                )
-        else:
-            dispatch = evaluator_config.resolve_dispatch("XSTACK-001")
-            if dispatch.emits_skip_finding and dispatch.reason:
-                rule_status = (
-                    (evaluator_config.rule_catalog or {})
-                    .get("XSTACK-001", {})
-                    .get("status", "")
-                )
-                skip_finding = _finding(
-                    "XSTACK-001",
-                    "INFO",
-                    "structural_conformance",
-                    f"Skipped: {dispatch.reason}",
-                    "",
-                )
-                if rule_status:
-                    skip_finding["status"] = rule_status
-                findings.append(skip_finding)
+        # XSTACK-001 does not apply to this repo shape (e.g. logger-primitive
+        # trait) or is explicitly exempted. Emit no finding — see the main
+        # _run() skip branch for the rationale.
+        pass
 
     # Standards freshness check only applies to standards-repo type
     if evaluator_config is not None:
