@@ -1425,16 +1425,24 @@ def test_evaluator_config_pipeline_logger_primitive_skips_cd009_violation(
     assert not cd009_bad
 
 
-def test_check_eval_003_flags_missing_rule_id() -> None:
-    """A finding without a rule ID reference in finding_text flags EVAL-003."""
+def test_check_eval_003_flags_untagged_finding() -> None:
+    """A finding with no rule_id field flags EVAL-003.
+
+    Ground truth for "is this finding attributed to a rule?" is the
+    rule_id column, not a regex match on the finding text. A finding
+    emitted without rule_id set (or with the CHECKER sentinel) is an
+    orphan — no rule owns it.
+    """
     fake_response = {
         "data": [
             {
                 "id": 1,
                 "finding": "Something is wrong but we won't say what rule",
+                "severity": "WARN",
                 "suggestion": "A sufficiently long remediation string that passes the length check easily.",
                 "standards_version": "4.0.0",
                 "run_id": "x",
+                # rule_id intentionally absent
             },
         ],
     }
@@ -1451,9 +1459,80 @@ def test_check_eval_003_flags_missing_rule_id() -> None:
         findings = check_eval_003()
 
     assert any(
-        f["rule_id"] == "EVAL-003" and "no rule ID reference" in f["finding"]
+        f["rule_id"] == "EVAL-003" and "not tagged with a rule_id" in f["finding"]
         for f in findings
     )
+
+
+def test_check_eval_003_accepts_tagged_finding_without_rule_id_in_text() -> None:
+    """A finding with rule_id set on the row does NOT flag EVAL-003,
+    even if the finding text does not repeat the rule ID inline.
+
+    Regression guard for the 2026-04 triage: EVAL-003 was previously
+    regex-matching the finding text for a rule-ID pattern, which fired
+    on correctly-tagged findings like
+    "docs/decisions/ exists but no ADR-NNN-*.md files were found."
+    (rule_id="DOC-005"). The check now looks at the rule_id field
+    directly, so these pass.
+    """
+    fake_response = {
+        "data": [
+            {
+                "id": 100,
+                "rule_id": "DOC-005",
+                "finding": "docs/decisions/ exists but no ADR-NNN-*.md files were found.",
+                "severity": "WARN",
+                "suggestion": "Create a first ADR or remove the empty docs/decisions directory.",
+                "standards_version": "4.1.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert findings == []
+
+
+def test_check_eval_003_skips_checker_infrastructure_errors() -> None:
+    """CHECKER-sentinel findings (emitted when a check itself raised) are
+    infrastructure errors with no owning rule by design. EVAL-003 should
+    not grade them as orphans."""
+    fake_response = {
+        "data": [
+            {
+                "id": 200,
+                "rule_id": "CHECKER",
+                "finding": "Check check_foo raised an unexpected error: boom",
+                "severity": "WARN",
+                "suggestion": "Investigate the checker itself.",
+                "standards_version": "4.1.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert findings == []
 
 
 def test_check_eval_003_accepts_short_but_clear_finding() -> None:
@@ -1604,7 +1683,9 @@ def test_check_eval_003_passes_well_formed_finding() -> None:
         "data": [
             {
                 "id": 3,
+                "rule_id": "PY-011",
                 "finding": "PY-011: Module names in the snake_case directory use camelCase — inconsistent with PEP 8 and the repo's convention.",
+                "severity": "WARN",
                 "suggestion": "Rename the affected modules to snake_case per PY-011. Update imports across the codebase.",
                 "standards_version": "4.0.0",
                 "run_id": "x",

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import re as _re_eval003
 
 from evaluator_cog.engine.deterministic._shared import (
     Finding,
@@ -37,7 +36,13 @@ def check_eval_003(
        the check doesn't recursively grade its prior emissions.
 
     Quality axes on the filtered set:
-      - Finding text references at least one rule ID (e.g. PY-001).
+      - Row is tagged with a rule_id (i.e. `rule_id` / `violation_id`
+        column is populated with a real rule ID, not the ``CHECKER``
+        infrastructure-error sentinel). This is ground truth — every
+        finding emitted via ``_finding()`` sets the column. The
+        previous text-regex proxy was flawed because it fired on
+        correctly-tagged findings whose text didn't happen to repeat
+        the rule ID.
       - Remediation is non-empty and of reasonable length relative
         to the finding text.
 
@@ -85,9 +90,12 @@ def check_eval_003(
         rows = []
 
     findings: list[Finding] = []
-    rule_id_pattern = _re_eval003.compile(r"[A-Z]+-\d+")
 
     _gradeable_severities = {"WARN", "WARNING", "ERROR", "CRITICAL"}
+    # "CHECKER" is the sentinel used by runner.py when a check raises
+    # unexpectedly — those are infrastructure-error findings, not
+    # conformance findings, and they legitimately have no rule ID.
+    _non_rule_sentinels = {"", "CHECKER"}
 
     for row in rows:
         if not isinstance(row, dict):
@@ -110,9 +118,15 @@ def check_eval_003(
         if row_rule_id == CHECK_ID:
             continue
 
+        # Don't grade CHECKER infrastructure-error findings — those are
+        # emitted when a check function itself raised, and have no
+        # associated rule by design.
+        if row_rule_id == "CHECKER":
+            continue
+
         problems: list[str] = []
-        if not rule_id_pattern.search(text):
-            problems.append("no rule ID reference in finding_text")
+        if row_rule_id in _non_rule_sentinels:
+            problems.append("finding is not tagged with a rule_id")
         if not remediation:
             problems.append("empty remediation")
         elif len(remediation) < max(len(text) * 0.5, 40):
@@ -130,8 +144,8 @@ def check_eval_003(
                     f"Finding {row_id} violates EVAL-003: "
                     + "; ".join(problems)
                     + f". finding={text[:80]!r}",
-                    "Rewrite the finding to reference a rule ID "
-                    "and include concrete remediation guidance.",
+                    "Ensure the finding is emitted via _finding() with a "
+                    "proper rule_id and a concrete remediation string.",
                 )
             )
 
