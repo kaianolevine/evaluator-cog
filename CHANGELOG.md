@@ -1,3 +1,10 @@
+## [3.13.7](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.6...v3.13.7) (2026-04-22)
+
+
+### Bug Fixes
+
+* **eval-003:** replace ratio check with absolute minimum length ([6d66acb](https://github.com/mini-app-polis/evaluator-cog/commit/6d66acb584ed014573eb0a680b53a2a9abc615a3))
+
 ## [3.13.6](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.5...v3.13.6) (2026-04-22)
 
 
