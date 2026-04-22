@@ -1,3 +1,10 @@
+## [3.13.6](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.5...v3.13.6) (2026-04-22)
+
+
+### Bug Fixes
+
+* **evaluator:** stop llm from emitting info findings for clean or unassessable rules ([2d540b0](https://github.com/mini-app-polis/evaluator-cog/commit/2d540b0a9647aadeb87e1f6c4a40926e741986fc))
+
 ## [3.13.5](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.4...v3.13.5) (2026-04-22)
 
 
