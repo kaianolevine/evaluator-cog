@@ -1456,12 +1456,22 @@ def test_check_eval_003_flags_missing_rule_id() -> None:
     )
 
 
-def test_check_eval_003_flags_too_short_finding() -> None:
+def test_check_eval_003_accepts_short_but_clear_finding() -> None:
+    """Short-but-actionable findings should not be flagged for length alone.
+
+    The legacy ≤60-char length check was removed in 2026-04. A concise
+    finding like "PY-001 bad" still isn't flagged for length (even though
+    it's arguably too terse to be useful — we accept that trade-off to
+    avoid false positives on legitimate short findings like "Layer 1
+    missing: no HEALTHCHECKS_URL env var or healthchecks.io ping").
+    Remediation coverage (below) still catches under-specified findings.
+    """
     fake_response = {
         "data": [
             {
                 "id": 2,
-                "finding": "PY-001 bad",  # <60 chars, has rule id
+                "finding": "PY-001 bad",  # has rule id
+                "severity": "WARN",
                 "suggestion": "A sufficiently long remediation string here.",
                 "standards_version": "4.0.0",
                 "run_id": "x",
@@ -1480,7 +1490,113 @@ def test_check_eval_003_flags_too_short_finding() -> None:
     with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
         findings = check_eval_003()
 
-    assert any("too short" in f["finding"] for f in findings)
+    assert not any("too short" in f["finding"] for f in findings)
+    assert not any("finding_text too short" in f["finding"] for f in findings)
+
+
+def test_check_eval_003_skips_info_severity_dispatcher_findings() -> None:
+    """INFO-severity rows (dispatcher meta) are not graded.
+
+    Skipped: / deferred / downgraded notes emitted by the deterministic
+    dispatcher carry severity INFO and are intentionally short,
+    rule-ID-free, and remediation-free. Regression guard for the
+    2026-04 Introspection noise spike.
+    """
+    fake_response = {
+        "data": [
+            {
+                "id": 10,
+                "finding": "Skipped: Exempted by trait: logger-primitive",
+                "severity": "INFO",
+                "suggestion": "",
+                "standards_version": "4.1.0",
+                "run_id": "x",
+            },
+            {
+                "id": 11,
+                "finding": "Run completed successfully.",
+                "severity": "SUCCESS",
+                "suggestion": "",
+                "standards_version": "4.1.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert findings == []
+
+
+def test_check_eval_003_skips_skipped_prefix_even_at_warn() -> None:
+    """Belt-and-suspenders: "Skipped:"-prefixed rows are dropped even if
+    severity somehow arrives as WARN (defensive — catches future
+    dispatcher bugs where a skip note leaks through with the wrong
+    severity)."""
+    fake_response = {
+        "data": [
+            {
+                "id": 20,
+                "finding": "Skipped: Evaluator false positive — check_foo mismatch",
+                "severity": "WARN",
+                "suggestion": "",
+                "standards_version": "4.1.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert findings == []
+
+
+def test_check_eval_003_does_not_grade_its_own_prior_emissions() -> None:
+    """EVAL-003 must not recursively grade its own stored findings."""
+    fake_response = {
+        "data": [
+            {
+                "id": 30,
+                "rule_id": "EVAL-003",
+                "finding": "Finding xyz violates EVAL-003: no rule ID reference",
+                "severity": "WARN",
+                "suggestion": "",
+                "standards_version": "4.1.0",
+                "run_id": "x",
+            },
+        ],
+    }
+
+    class FakeApi:
+        @staticmethod
+        def from_env():
+            return FakeApi()
+
+        def get(self, _path: str):
+            return fake_response
+
+    with patch("mini_app_polis.api.KaianoApiClient", FakeApi):
+        findings = check_eval_003()
+
+    assert findings == []
 
 
 def test_check_eval_003_passes_well_formed_finding() -> None:

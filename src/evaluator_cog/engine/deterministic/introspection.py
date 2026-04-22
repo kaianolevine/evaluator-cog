@@ -22,6 +22,29 @@ def check_eval_003(
     name 'conformance_check' is also included so findings stored before
     the conformance_llm / conformance_deterministic / data_quality split
     are still covered by the quality check.
+
+    Scoping rules (to avoid grading things that aren't conformance findings):
+
+    1. **Severity gate** — only WARN and ERROR findings are graded. INFO
+       and SUCCESS rows are dispatcher artifacts (Skipped: / deferred /
+       downgraded notes, completion markers) — intentionally short,
+       rule-ID-free, and remediation-free. They are not conformance
+       findings about a target repo.
+    2. **Dispatcher "Skipped:" gate** — any finding whose text begins
+       with ``"Skipped:"`` is a dispatch meta-finding. Belt-and-suspenders
+       with the severity gate.
+    3. **Self-reference gate** — EVAL-003's own findings are skipped so
+       the check doesn't recursively grade its prior emissions.
+
+    Quality axes on the filtered set:
+      - Finding text references at least one rule ID (e.g. PY-001).
+      - Remediation is non-empty and of reasonable length relative
+        to the finding text.
+
+    Note: the pre-2026-04 ≤60-char length check on finding text was
+    removed. Short-but-clear actionable findings like
+    ``"Layer 1 missing: no HEALTHCHECKS_URL env var..."`` are
+    legitimate — length alone is a poor proxy for quality.
     """
     CHECK_ID = "EVAL-003"
     from mini_app_polis.api import KaianoApiClient
@@ -64,6 +87,8 @@ def check_eval_003(
     findings: list[Finding] = []
     rule_id_pattern = _re_eval003.compile(r"[A-Z]+-\d+")
 
+    _gradeable_severities = {"WARN", "WARNING", "ERROR", "CRITICAL"}
+
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -71,11 +96,23 @@ def check_eval_003(
         remediation = str(row.get("suggestion") or row.get("remediation") or "").strip()
         row_id = row.get("id") or row.get("run_id")
 
+        # Severity gate — skip dispatcher INFO/SUCCESS rows.
+        severity = str(row.get("severity") or "").strip().upper()
+        if severity and severity not in _gradeable_severities:
+            continue
+
+        # Dispatcher "Skipped:" gate (defense-in-depth).
+        if text.startswith("Skipped:"):
+            continue
+
+        # Don't recursively grade our own emissions.
+        row_rule_id = str(row.get("rule_id") or row.get("violation_id") or "").strip()
+        if row_rule_id == CHECK_ID:
+            continue
+
         problems: list[str] = []
         if not rule_id_pattern.search(text):
             problems.append("no rule ID reference in finding_text")
-        if len(text) <= 60:
-            problems.append(f"finding_text too short ({len(text)} chars)")
         if not remediation:
             problems.append("empty remediation")
         elif len(remediation) < max(len(text) * 0.5, 40):
@@ -93,8 +130,8 @@ def check_eval_003(
                     f"Finding {row_id} violates EVAL-003: "
                     + "; ".join(problems)
                     + f". finding={text[:80]!r}",
-                    "Rewrite the finding to reference a rule ID, "
-                    "expand past 60 chars, and include concrete remediation guidance.",
+                    "Rewrite the finding to reference a rule ID "
+                    "and include concrete remediation guidance.",
                 )
             )
 
