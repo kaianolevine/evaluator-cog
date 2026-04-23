@@ -109,7 +109,7 @@ from evaluator_cog.engine.deterministic.pipeline import (
 )
 from evaluator_cog.engine.deterministic.python import (
     check_common_python_utils_dep,
-    check_duplicate_prefix,
+    check_dedup_handling_present,
     check_failed_prefix,
     check_finally_cleanup,
     check_mypy_in_ci,
@@ -166,7 +166,7 @@ __all__ = [
     "check_cors_config",
     "check_db_test_fixtures",
     "check_db_writes_use_upserts",
-    "check_duplicate_prefix",
+    "check_dedup_handling_present",
     "check_env_example",
     "check_env_example_settings_parity",
     "check_env_var_prefix",

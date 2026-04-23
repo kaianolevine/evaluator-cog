@@ -274,27 +274,69 @@ def check_failed_prefix(repo_path: Path) -> list[Finding]:
     return findings
 
 
-def check_duplicate_prefix(repo_path: Path) -> list[Finding]:
-    """PY-013: possible_duplicate_ prefix for duplicates."""
+def check_dedup_handling_present(repo_path: Path) -> list[Finding]:
+    """PY-013: Deduplication handling is visible in source.
+
+    Detective check — fires when no dedup-awareness signals are found in
+    src/. The check does not verify correctness of any dedup
+    implementation (that is a semantic property beyond deterministic
+    checking). It establishes only that the cog has considered
+    duplicates.
+
+    Signal list is specified in ecosystem-standards PY-013 check_notes
+    and must stay in sync with that definition. If a new dedup pattern
+    enters ecosystem use that isn't covered here, update both the
+    standard's check_notes and this signal tuple together.
+
+    Cogs whose inputs cannot contain duplicates by construction should
+    declare a PY-013 exemption in evaluator.yaml rather than having
+    this check fire silently-incorrectly against them.
+    """
     CHECK_ID = "PY-013"
-    findings = []
+    findings: list[Finding] = []
     src = repo_path / "src"
     if not src.is_dir():
         return findings
 
+    # Lowercased source text for case-insensitive substring matching.
+    # Each signal is a lowercase substring; a file is considered
+    # dedup-aware if any signal appears anywhere in any Python source
+    # under src/.
+    #
+    # Keep this list in sync with PY-013 check_notes in ecosystem-standards.
+    dedup_signals: tuple[str, ...] = (
+        "dedup",
+        "duplicate",
+        "already exists",
+        "already processed",
+        "on_conflict",
+        "on conflict",
+        "integrityerror",
+        "unique constraint",
+        "uniqueviolation",
+    )
+
     content = "\n".join(f.read_text().lower() for f in src.rglob("*.py"))
-    dedup_signals = ("dedup", "duplicate", "already exists")
-    if (
-        any(s in content for s in dedup_signals)
-        and "possible_duplicate_" not in content
-    ):
+    if not any(signal in content for signal in dedup_signals):
         findings.append(
             _finding(
                 "PY-013",
                 "WARN",
                 "structural_conformance",
-                "Deduplication logic present but possible_duplicate_ prefixing is missing.",
-                "Prefix duplicate files with possible_duplicate_ to preserve recoverability.",
+                (
+                    "No visible deduplication handling — source contains "
+                    "no signals for uniqueness constraints, conflict "
+                    "handling, or duplicate detection."
+                ),
+                (
+                    "If this cog processes potentially-repeating input, "
+                    "add explicit dedup handling (file rename, uniqueness "
+                    "constraint, skip-on-conflict, content-hash, etc.) "
+                    "and record the chosen strategy in an ADR. If "
+                    "duplicates cannot occur in this cog's inputs, "
+                    "declare a PY-013 exemption in evaluator.yaml with "
+                    "a reason."
+                ),
             )
         )
     return findings

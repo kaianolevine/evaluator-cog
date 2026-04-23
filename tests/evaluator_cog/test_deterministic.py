@@ -14,7 +14,7 @@ from evaluator_cog.engine.deterministic import (
     check_changelog,
     check_ci,
     check_common_python_utils_dep,
-    check_duplicate_prefix,
+    check_dedup_handling_present,
     check_env_example,
     check_eval_003,
     check_eval_007,
@@ -402,17 +402,49 @@ def test_check_failed_prefix_passes_when_present() -> None:
     assert findings == []
 
 
-def test_check_duplicate_prefix_flags_and_passes() -> None:
-    failing = _make_repo(
-        {"src/my_pkg/dedup.py": "def x():\n    # duplicate file\n    return 'dup'\n"}
-    )
-    assert any(f["rule_id"] == "PY-013" for f in check_duplicate_prefix(failing))
-    passing = _make_repo(
+def test_check_dedup_handling_present_passes_when_signal_exists() -> None:
+    """Repo source containing any dedup signal passes PY-013."""
+    # File-level pattern (deejay-cog style).
+    file_level = _make_repo(
         {
-            "src/my_pkg/dedup.py": "possible_duplicate_ = True\ndef x():\n    return 'duplicate'\n"
+            "src/my_pkg/archive.py": (
+                "def archive(path):\n"
+                "    # rename with possible_duplicate_ prefix on collision\n"
+                "    return path\n"
+            )
         }
     )
-    assert check_duplicate_prefix(passing) == []
+    assert check_dedup_handling_present(file_level) == []
+
+    # Row-level pattern (notes-ingest-cog style).
+    row_level = _make_repo(
+        {
+            "src/my_pkg/ingest.py": (
+                "def ingest(row):\n"
+                "    # server rejects via unique constraint; we skip\n"
+                "    try:\n"
+                "        store(row)\n"
+                "    except IntegrityError:\n"
+                "        return 'already processed'\n"
+            )
+        }
+    )
+    assert check_dedup_handling_present(row_level) == []
+
+
+def test_check_dedup_handling_present_flags_when_no_signal() -> None:
+    """Repo source containing no dedup signals fires PY-013."""
+    repo = _make_repo(
+        {"src/my_pkg/transform.py": ("def transform(x):\n    return x * 2\n")}
+    )
+    findings = check_dedup_handling_present(repo)
+    assert any(f["rule_id"] == "PY-013" for f in findings)
+
+
+def test_check_dedup_handling_present_no_src_dir() -> None:
+    """Repo without a src/ directory emits no findings."""
+    repo = _make_repo({"README.md": "# empty"})
+    assert check_dedup_handling_present(repo) == []
 
 
 def test_check_no_manual_changelog_flags_prose_section() -> None:
