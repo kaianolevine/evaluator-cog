@@ -239,6 +239,30 @@ def test_cd012_flags_internal_httpx_without_jwt_signals(tmp_path: Path) -> None:
     assert any(x["rule_id"] == "CD-012" for x in f)
 
 
+def test_cd012_skips_deterministic_checker_source_directory(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/evaluator_cog/engine/deterministic/pipeline.py",
+        "PATTERN = '/v1/'\n"
+        "HTTP = 'httpx'\n"
+        "RULE = r'(httpx|requests)\\.(post|put)\\('\n",
+    )
+    assert check_clerk_m2m_auth(tmp_path, language="python") == []
+
+
+def test_cd012_accepts_common_python_api_client_delegation(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/evaluator_cog/engine/api_client.py",
+        "import httpx\n"
+        "from mini_app_polis.api import CommonPythonApiClient\n"
+        "def post_findings():\n"
+        "    client = CommonPythonApiClient.from_env()\n"
+        "    return client.post('/v1/evaluation/findings', json={})\n",
+    )
+    assert check_clerk_m2m_auth(tmp_path, language="python") == []
+
+
 # --- PIPE-002 / PIPE-005 ------------------------------------------------------
 
 

@@ -24,6 +24,8 @@ exemptions:
     reason: "Concurrency guard implemented via prefect.concurrency.sync concurrency('evaluator-cog-writes', occupy=1) wrapping the full write path in conformance_check_flow."
 
 deferrals:
+  # CD-012 deferral removed after Project Keystone completion.
+  # Clerk-aware auth is now enforced/recognized in deterministic check logic.
   - rule: PIPE-006
     reason: >
       pipeline_eval.py is not a @flow-decorated function — it is a library module called
@@ -37,14 +39,6 @@ deferrals:
       against the most recent stored finding). A server-side idempotency guard is
       backlogged — deferred due to complexity of constraining TEXT columns and cleaning
       up existing duplicate rows.
-    until: null
-  - rule: CD-012
-    reason: >
-      Replace X-Internal-API-Key with Clerk M2M JWT. This is Project Keystone —
-      the ecosystem-wide auth migration coordinated across all cogs and
-      api-kaianolevine-com. Current state: Phase 1 (legacy only). Will be
-      resolved atomically across the ecosystem when Keystone ships.
-      See api-kaianolevine-com migration 013 for phase tracking.
     until: null
 
 # TEST-001/002/004 covered by pipeline-cog type scoping (evaluator has no

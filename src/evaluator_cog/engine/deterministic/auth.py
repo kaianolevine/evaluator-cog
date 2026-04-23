@@ -13,7 +13,22 @@ from evaluator_cog.engine.deterministic._shared import (
 
 
 def check_clerk_m2m_auth(repo_path: Path, *, language: str = "python") -> list[Finding]:
-    """CD-012: Internal calls should use Clerk M2M JWTs, not static API keys."""
+    """CD-012: Internal calls should use Clerk M2M JWTs, not static API keys.
+
+    Recognized Clerk-aware call patterns (any of these counts as compliant):
+      - A Clerk-aware client class: CommonPythonApiClient, KaianoApiClient
+        (from mini_app_polis.api) handles M2M JWT acquisition internally.
+      - Explicit tokens in the module text: 'clerk', 'jwt', 'get_token',
+        'authenticate'.
+
+    Skipped directories:
+      - tests/ — test code may use static fixtures or TestClient.
+      - src/<pkg>/engine/deterministic/ — the deterministic checker source
+        contains HTTP client and path pattern strings as literals it uses
+        to detect violations in other repos. Scanning it here produces
+        meta-false-positives where the checker flags its own detection
+        logic as a violation.
+    """
     CHECK_ID = "CD-012"
     findings: list[Finding] = []
     if language != "python":
@@ -21,13 +36,27 @@ def check_clerk_m2m_auth(repo_path: Path, *, language: str = "python") -> list[F
     src = repo_path / "src"
     if not src.is_dir():
         return findings
+
+    clerk_aware_tokens = (
+        "clerk",
+        "jwt",
+        "get_token",
+        "authenticate",
+        "commonpythonapiclient",
+        "kaianoapiclient",
+    )
+
     for py in src.rglob("*.py"):
-        if "tests/" in str(py).replace("\\", "/"):
+        rel_str = str(py).replace("\\", "/")
+        if "tests/" in rel_str:
+            continue
+        if "/engine/deterministic/" in rel_str:
             continue
         try:
             text = py.read_text()
         except OSError:
             continue
+        lowered = text.lower()
         if "X-Internal-API-Key" in text and not _is_inside_string_literal(
             text, "X-Internal-API-Key"
         ):
@@ -43,10 +72,7 @@ def check_clerk_m2m_auth(repo_path: Path, *, language: str = "python") -> list[F
         elif (
             ("api.kaianolevine" in text or '"/v1/' in text)
             and "httpx" in text
-            and not any(
-                token in text.lower()
-                for token in ("clerk", "jwt", "get_token", "authenticate")
-            )
+            and not any(token in lowered for token in clerk_aware_tokens)
         ):
             findings.append(
                 _finding(
