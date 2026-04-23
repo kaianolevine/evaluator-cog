@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import ast
-import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 Finding = dict[str, Any]
@@ -92,7 +92,7 @@ def _is_inside_string_literal(source: str, match_substring: str) -> bool:
     return literal_hits >= total_hits
 
 
-def _is_checker_self_source(py: os.PathLike[str] | str) -> bool:
+def _is_checker_self_source(py: Path) -> bool:
     """True if `py` is inside the deterministic checker's own source tree.
 
     The deterministic checkers pattern-match on literal strings like
