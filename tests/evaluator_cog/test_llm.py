@@ -13,6 +13,7 @@ import respx
 
 from evaluator_cog.engine.llm import (
     _anthropic_messages_create,
+    _gather_evidence_files,
     _normalize_finding,
     _parse_findings_from_claude,
     build_conformance_prompt,
@@ -437,6 +438,127 @@ def test_build_conformance_prompt_with_no_repo_path_omits_inventory() -> None:
     )
     assert "REPO FILE INVENTORY" not in prompt
     assert "README.md CONTENT" not in prompt
+
+
+def test_gather_evidence_includes_pyproject(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='x'\ndependencies=['sentry-sdk>=2.0']\n"
+    )
+    evidence = _gather_evidence_files(tmp_path)
+    assert "=== pyproject.toml ===" in evidence
+    assert "sentry-sdk" in evidence
+
+
+def test_gather_evidence_respects_budget(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("p" * 20000)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("m" * 20000)
+    (tmp_path / "src" / "app.py").write_text("a" * 20000)
+    (tmp_path / "src" / "__main__.py").write_text("b" * 20000)
+    (tmp_path / "src" / "logger.py").write_text("l" * 20000)
+    (tmp_path / "src" / "observability.py").write_text("o" * 20000)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_big.py").write_text("t" * 20000)
+    (tmp_path / "tests" / "test_big_two.py").write_text("u" * 20000)
+    (tmp_path / "tests" / "test_big_three.py").write_text("v" * 20000)
+    (tmp_path / "tests" / "test_big_four.py").write_text("w" * 20000)
+
+    evidence = _gather_evidence_files(tmp_path, total_budget_chars=30000)
+    assert len(evidence) <= 30000
+    assert (
+        "Files matching evidence patterns but not included due to 30000-char budget"
+        in evidence
+    )
+
+
+def test_gather_evidence_skips_node_modules(tmp_path: Path) -> None:
+    node_pkg = tmp_path / "node_modules" / "some-pkg"
+    node_pkg.mkdir(parents=True)
+    (node_pkg / "package.json").write_text('{"name":"skip-me"}')
+    evidence = _gather_evidence_files(tmp_path)
+    assert "node_modules/some-pkg/package.json" not in evidence
+
+
+def test_gather_evidence_truncates_large_files(tmp_path: Path) -> None:
+    payload = "x" * 15000
+    (tmp_path / "pyproject.toml").write_text(payload)
+    evidence = _gather_evidence_files(tmp_path)
+    assert "=== pyproject.toml ===" in evidence
+    assert payload[:6000] in evidence
+    assert "...(truncated, 9000 more chars)" in evidence
+
+
+def test_build_conformance_prompt_includes_evidence_block(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n")
+    prompt = build_conformance_prompt(
+        repo_id="demo",
+        service_type="api-service",
+        language="python",
+        standards_version="3.0.1",
+        deterministic_findings=[],
+        standards_rules=[],
+        repo_path=tmp_path,
+    )
+    assert "REPO FILE CONTENTS" in prompt
+    assert "=== pyproject.toml ===" in prompt
+    assert "name='demo'" in prompt
+
+
+def test_build_conformance_prompt_no_repo_path() -> None:
+    prompt = build_conformance_prompt(
+        repo_id="demo",
+        service_type="api-service",
+        language="python",
+        standards_version="3.0.1",
+        deterministic_findings=[],
+        standards_rules=[],
+        repo_path=None,
+    )
+    assert (
+        "REPO FILE CONTENTS (curated evidence — read this for rule assessment):"
+        not in prompt
+    )
+
+
+def test_api_kaianolevine_com_style_repo_does_not_trigger_false_prin_005(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        "name = 'api-kaianolevine-com'\n"
+        "dependencies = ['sentry-sdk>=2.0', 'common-python-utils>=1.0']\n"
+    )
+    app_dir = tmp_path / "src" / "app"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.py").write_text(
+        "import sentry_sdk\n"
+        "from mini_app_polis.logger import get_logger\n"
+        "sentry_sdk.init(dsn='x')\n"
+        "logger = get_logger(__name__)\n"
+    )
+    prompt = build_conformance_prompt(
+        repo_id="api-kaianolevine-com",
+        service_type="api-service",
+        language="python",
+        standards_version="3.0.1",
+        deterministic_findings=[],
+        standards_rules=[
+            {
+                "id": "PRIN-005",
+                "severity": "WARN",
+                "title": "Use sentry and common logging primitives",
+                "check_notes": "Check pyproject and main app initialization.",
+                "check_mode": "llm",
+            }
+        ],
+        repo_path=tmp_path,
+    )
+    assert "=== pyproject.toml ===" in prompt
+    assert "sentry-sdk" in prompt
+    assert "common-python-utils" in prompt
+    assert "=== src/app/main.py ===" in prompt
+    assert "sentry_sdk.init" in prompt
+    assert "mini_app_polis.logger" in prompt
 
 
 def test_build_conformance_prompt_inventory_truncated_beyond_60_files(

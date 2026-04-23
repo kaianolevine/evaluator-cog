@@ -12,6 +12,179 @@ from typing import Any
 _JSON_FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
 
 
+def _gather_evidence_files(repo_path: Path, *, total_budget_chars: int = 40000) -> str:
+    """Collect curated repo file contents for LLM rule assessment evidence."""
+    if repo_path is None or total_budget_chars <= 0:
+        return ""
+
+    def _is_hidden_or_ignored(path: Path) -> bool:
+        parts = path.relative_to(repo_path).parts
+        for part in parts:
+            if part in {"node_modules", ".venv", "__pycache__"}:
+                return True
+            if part.startswith(".") and part != ".github":
+                return True
+        return False
+
+    def _read_with_cap(path: Path, cap: int, *, uv_lock_limit: bool = False) -> str:
+        try:
+            if uv_lock_limit:
+                with path.open("r", encoding="utf-8", errors="replace") as fh:
+                    raw = "".join(line for _, line in zip(range(200), fh, strict=False))
+            else:
+                raw = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
+
+        if len(raw) <= cap:
+            return raw
+        remaining = len(raw) - cap
+        return f"{raw[:cap]}\n...(truncated, {remaining} more chars)\n"
+
+    def _eligible_files(patterns: list[str]) -> list[Path]:
+        out: list[Path] = []
+        for pattern in patterns:
+            for p in repo_path.glob(pattern):
+                if not p.is_file():
+                    continue
+                if p.name == "pnpm-lock.yaml":
+                    continue
+                if _is_hidden_or_ignored(p):
+                    continue
+                out.append(p)
+        return sorted(set(out), key=lambda p: str(p.relative_to(repo_path)))
+
+    groups = [
+        {
+            "patterns": [
+                "pyproject.toml",
+                "package.json",
+                "requirements.txt",
+                "uv.lock",
+            ],
+            "per_file_cap": 6000,
+            "test_group_cap": None,
+        },
+        {
+            "patterns": [
+                "src/**/main.py",
+                "src/**/app.py",
+                "src/**/__main__.py",
+                "src/index.ts",
+                "src/index.tsx",
+                "src/main.ts",
+                "apps/*/src/main.py",
+                "apps/*/src/index.ts",
+            ],
+            "per_file_cap": 5000,
+            "test_group_cap": None,
+        },
+        {
+            "patterns": [
+                "src/**/flows/*.py",
+                "src/**/deploy*.py",
+                "**/*deployment*.py",
+                "**/*schedule*.py",
+            ],
+            "per_file_cap": 4000,
+            "test_group_cap": None,
+        },
+        {
+            "patterns": [
+                "**/auth.py",
+                "**/logger.py",
+                "**/observability.py",
+                "**/sentry*.py",
+            ],
+            "per_file_cap": 4000,
+            "test_group_cap": None,
+        },
+        {
+            "patterns": ["tests/**/*.py", "tests/**/*.ts", "tests/**/*.test.ts"],
+            "per_file_cap": 3000,
+            "test_group_cap": 12000,
+        },
+        {
+            "patterns": [
+                ".github/workflows/*.yml",
+                "railway.toml",
+                "railway.json",
+                "nixpacks.toml",
+            ],
+            "per_file_cap": 2000,
+            "test_group_cap": None,
+        },
+    ]
+
+    header = (
+        "REPO FILE CONTENTS (curated evidence — read this for rule assessment):\n\n"
+    )
+    remaining = total_budget_chars
+    if len(header) > remaining:
+        return ""
+    remaining -= len(header)
+    sections: list[str] = [header]
+    omitted_due_budget: list[str] = []
+
+    for group in groups:
+        test_group_remaining = group["test_group_cap"]
+        for path in _eligible_files(group["patterns"]):
+            rel_path = str(path.relative_to(repo_path))
+            cap = group["per_file_cap"]
+            if test_group_remaining is not None:
+                if test_group_remaining <= 0:
+                    omitted_due_budget.append(rel_path)
+                    continue
+                cap = min(cap, test_group_remaining)
+
+            content = _read_with_cap(path, cap, uv_lock_limit=(path.name == "uv.lock"))
+            if not content:
+                continue
+
+            chunk = f"=== {rel_path} ===\n{content}\n\n"
+            if len(chunk) <= remaining:
+                sections.append(chunk)
+                remaining -= len(chunk)
+                if test_group_remaining is not None:
+                    test_group_remaining -= min(cap, len(content))
+                continue
+
+            if remaining >= 500:
+                header_only = f"=== {rel_path} ===\n"
+                trailer = "\n\n"
+                if len(header_only) + len(trailer) >= remaining:
+                    omitted_due_budget.append(rel_path)
+                    continue
+                max_content_len = remaining - len(header_only) - len(trailer)
+                truncated = content[:max_content_len]
+                chunk_partial = f"{header_only}{truncated}{trailer}"
+                sections.append(chunk_partial)
+                remaining -= len(chunk_partial)
+                if test_group_remaining is not None:
+                    test_group_remaining -= min(cap, len(truncated))
+            else:
+                omitted_due_budget.append(rel_path)
+
+    included_file_count = sum(1 for s in sections if s.startswith("=== "))
+    if included_file_count == 0 and not omitted_due_budget:
+        return ""
+
+    text = "".join(sections)
+    if not omitted_due_budget:
+        return text
+
+    footer_intro = f"(Files matching evidence patterns but not included due to {total_budget_chars}-char budget:\n"
+    footer_items = "".join(f"  {p}\n" for p in sorted(set(omitted_due_budget)))
+    footer = f"{footer_intro}{footer_items})\n"
+    if len(text) + len(footer) <= total_budget_chars:
+        return text + footer
+
+    body_budget = max(total_budget_chars - len(footer), 0)
+    text = text[:body_budget]
+    remaining_for_footer = total_budget_chars - len(text)
+    return text + footer[:remaining_for_footer]
+
+
 def _normalize_finding(item: dict) -> dict:
     """
     Normalize a finding dict from Claude.
@@ -348,6 +521,10 @@ Monorepo context:
             except Exception:
                 readme_block = ""
 
+    evidence_block = ""
+    if repo_path is not None:
+        evidence_block = _gather_evidence_files(repo_path, total_budget_chars=40000)
+
     if evaluator_yaml_content:
         evaluator_yaml_block = f"""## Repo Evaluation Configuration (evaluator.yaml)
 
@@ -378,6 +555,7 @@ Check exceptions (do not flag these rule IDs):
 {exc_block}
 {monorepo_block}
 {inventory_block}
+{evidence_block}
 {readme_block}
 {evaluator_yaml_block}STANDARDS RULES FOR THIS SERVICE TYPE:
 The following are the checkable rules that apply to this repo type, with
@@ -416,14 +594,24 @@ The check_exceptions list is ABSOLUTE. Never produce a finding
 for any excepted rule under any framing — not as a different
 rule ID, not as a general observation, not as a suggestion.
 Exceptions are deliberate architectural decisions, not oversights.
-Never apply general ecosystem knowledge to infer violations.
-Only flag things observable directly from the file inventory,
-README content provided above, or deterministic findings.
-If you cannot observe a violation from the provided context,
-do not flag it.
-Never produce a finding phrased as "no deterministic result
-confirms X" — if you cannot observe something directly, do not
-flag it
+Evidence discipline:
+- The REPO FILE CONTENTS block above contains the primary evidence for
+  rule assessment. If a rule's check_notes reference a file or pattern,
+  look for that evidence in the contents block before emitting a finding.
+- NEVER claim a dependency, import, function call, configuration setting,
+  or SDK initialization is "absent", "missing", or "not present" unless
+  you have looked at the relevant file in the contents block and confirmed
+  its absence from that file's content. Referring to the file inventory
+  alone (filenames only) is NOT sufficient evidence of absence — you must
+  see the file's contents and confirm the symbol is not there.
+- If the relevant file is listed in the file inventory but its contents
+  are NOT in the contents block (either not matched by the evidence
+  patterns, or omitted due to the budget footer), treat the rule as
+  UNASSESSABLE and emit no finding. Do not guess.
+- "Unassessable" means: emit no finding. Do not emit a hedged finding, a
+  "flagged for review" finding, or a finding phrased as "cannot confirm X
+  from the inventory alone." The correct response to unassessable is
+  silence.
 Never flag something as missing just because it was not mentioned
 in the deterministic findings — absence of a finding means passing
 Only flag rules where you have genuine positive signal of a problem
