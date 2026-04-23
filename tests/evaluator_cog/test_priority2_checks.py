@@ -320,6 +320,15 @@ def test_pipe002_flags_session_add_without_upsert_helpers(tmp_path: Path) -> Non
     assert any(x["rule_id"] == "PIPE-002" for x in f)
 
 
+def test_pipe002_skips_checker_self_source_literals(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "src/pkg/engine/deterministic/checker.py",
+        'PATTERN = "session.add("\n',
+    )
+    assert check_db_writes_use_upserts(tmp_path) == []
+
+
 def test_pipe002_passes_when_on_conflict_present(tmp_path: Path) -> None:
     _write(
         tmp_path,

@@ -9,6 +9,7 @@ from pathlib import Path
 from evaluator_cog.engine.deterministic._shared import (
     Finding,
     _finding,
+    _is_checker_self_source,
     _is_inside_string_literal,
 )
 
@@ -225,13 +226,21 @@ def check_response_shape_parity(
 
 
 def check_db_writes_use_upserts(repo_path: Path) -> list[Finding]:
-    """PIPE-002: Database writes should use upsert / ON CONFLICT patterns."""
+    """PIPE-002: Database writes should use upsert / ON CONFLICT patterns.
+
+    Skips the deterministic checker's own source — see
+    _is_checker_self_source for the rationale (checker pattern literals
+    like ``"session.add("`` trigger meta-self-detection when scanning
+    evaluator-cog itself).
+    """
     CHECK_ID = "PIPE-002"
     findings: list[Finding] = []
     src = repo_path / "src"
     if not src.is_dir():
         return findings
     for py in src.rglob("*.py"):
+        if _is_checker_self_source(py):
+            continue
         if "tests/" in str(py).replace("\\", "/"):
             continue
         try:
