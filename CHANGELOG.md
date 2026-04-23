@@ -1,3 +1,10 @@
+## [3.13.13](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.12...v3.13.13) (2026-04-23)
+
+
+### Bug Fixes
+
+* **deterministic:** PIPE-002 skips checker's own source ([a40a36e](https://github.com/mini-app-polis/evaluator-cog/commit/a40a36e3505f2781a70b51e6fed9bd5ab411d2b4))
+
 ## [3.13.12](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.11...v3.13.12) (2026-04-23)
 
 
