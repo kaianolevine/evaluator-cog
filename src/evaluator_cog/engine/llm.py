@@ -81,7 +81,9 @@ def _gather_evidence_files(repo_path: Path, *, total_budget_chars: int = 40000) 
         },
         {
             "patterns": [
+                "src/**/flow.py",
                 "src/**/flows/*.py",
+                "src/**/flows.py",
                 "src/**/deploy*.py",
                 "**/*deployment*.py",
                 "**/*schedule*.py",

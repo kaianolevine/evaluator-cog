@@ -488,6 +488,17 @@ def test_gather_evidence_truncates_large_files(tmp_path: Path) -> None:
     assert "...(truncated, 9000 more chars)" in evidence
 
 
+def test_gather_evidence_includes_singular_flow_py(tmp_path: Path) -> None:
+    flow_dir = tmp_path / "src" / "somecog"
+    flow_dir.mkdir(parents=True)
+    (flow_dir / "flow.py").write_text("FLOW_MARKER = 'single-flow-cog'\n")
+
+    evidence = _gather_evidence_files(tmp_path)
+
+    assert "=== src/somecog/flow.py ===" in evidence
+    assert "single-flow-cog" in evidence
+
+
 def test_build_conformance_prompt_includes_evidence_block(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n")
     prompt = build_conformance_prompt(
