@@ -149,15 +149,26 @@ def check_route_contract_tests(repo_path: Path) -> list[Finding]:
             continue
 
     # Build a regex for each route. `/catalog/{id}` becomes
-    # `/catalog/[^\s"'/]+`, so concrete URLs in tests like
+    # `/catalog/[^\s/]+`, so concrete URLs in tests like
     # `client.get(f"/v1/catalog/{item_id}")` or
     # `client.get("/v1/catalog/abc123")` match. Without this, path
     # parameters like `{id}` / `{name}` never appear literally in test
     # code and every parametrised route was reported as untested.
+    #
+    # The wildcard excludes slash (so a multi-segment path like
+    # `/sets/{id}/tracks` can't be falsely satisfied by a test URL
+    # `/v1/sets/abc/extra/tracks` — different route) and whitespace
+    # (so a match can't bleed across lines in the concatenated test
+    # text). Quotes are NOT excluded: Python f-strings often nest
+    # quote characters inside the path-parameter expression itself,
+    # e.g. `f"/v1/wcs/admin/notes/{note['id']}/visibility"`, and
+    # excluding quotes would cause the regex to fail on that
+    # extremely common pattern.
+    #
     # Routes without any `{...}` placeholder fall through to a plain
     # substring match via `re.escape`.
     _param_re = re.compile(r"\{[^}]+\}")
-    _param_sub = r"[^\s\"'/]+"
+    _param_sub = r"[^\s/]+"
 
     def _route_to_regex(route: str) -> re.Pattern[str]:
         parts = _param_re.split(route)

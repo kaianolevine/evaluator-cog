@@ -1174,6 +1174,39 @@ def test_test_010_accepts_multi_segment_param_route(tmp_path: Path) -> None:
     assert check_route_contract_tests(tmp_path) == []
 
 
+def test_test_010_accepts_fstring_with_dict_subscript_param(tmp_path: Path) -> None:
+    """TEST-010: f-string expressions with nested quotes must still match.
+
+    Regression: the earlier version of this fix used a wildcard that
+    excluded quote characters, which broke on the common Python idiom
+    `f"/v1/wcs/admin/notes/{note['id']}/visibility"` — the single quotes
+    around the dict key appear inside the path parameter and caused the
+    match to fail. The wildcard now excludes only slash and whitespace.
+    """
+    from evaluator_cog.engine.deterministic import check_route_contract_tests
+
+    _write_route(
+        tmp_path / "src",
+        "routes.py",
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.patch('/wcs/admin/notes/{note_id}/visibility')\n"
+        "async def set_default(note_id: str): return {}\n",
+    )
+    _write_test(
+        tmp_path / "tests",
+        "test_admin.py",
+        "async def test_patch_default(client):\n"
+        "    note = {'id': 'abc'}\n"
+        "    resp = await client.patch(\n"
+        '        f"/v1/wcs/admin/notes/{note[' + "'id'" + ']}/visibility",\n'
+        "        json={'is_default_visible': True},\n"
+        "    )\n"
+        "    assert resp.status_code == 200\n",
+    )
+    assert check_route_contract_tests(tmp_path) == []
+
+
 def test_test_010_still_flags_truly_untested_param_route(tmp_path: Path) -> None:
     """TEST-010: the fix must not regress the flagging of genuinely untested routes."""
     from evaluator_cog.engine.deterministic import check_route_contract_tests
