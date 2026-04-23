@@ -1,3 +1,11 @@
+## [3.13.10](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.9...v3.13.10) (2026-04-23)
+
+
+### Bug Fixes
+
+* **llm:** include singular flow.py in evidence patterns ([85db4b4](https://github.com/mini-app-polis/evaluator-cog/commit/85db4b4e2e259d70b1099f2bd3d1ea55b2db558c))
+* **llm:** supply file-content evidence to conformance prompt ([3ce2fed](https://github.com/mini-app-polis/evaluator-cog/commit/3ce2fed3a9d6dc8456d8d759473687259882c456))
+
 ## [3.13.9](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.8...v3.13.9) (2026-04-23)
 
 
