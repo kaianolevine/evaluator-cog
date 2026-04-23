@@ -1,3 +1,10 @@
+## [3.13.11](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.10...v3.13.11) (2026-04-23)
+
+
+### Bug Fixes
+
+* **deterministic:** CD-012 recognizes post-Keystone Clerk-aware client ([3259249](https://github.com/mini-app-polis/evaluator-cog/commit/325924966a037353657ed4756c86fd0dbeeb86ec))
+
 ## [3.13.10](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.9...v3.13.10) (2026-04-23)
 
 
