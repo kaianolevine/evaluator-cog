@@ -1,3 +1,10 @@
+## [3.13.12](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.11...v3.13.12) (2026-04-23)
+
+
+### Bug Fixes
+
+* **deterministic:** DOC-005 accepts NNN-*.md ADR naming ([c405867](https://github.com/mini-app-polis/evaluator-cog/commit/c405867576fca3b8d57dc6c59afd39b050a0f59a))
+
 ## [3.13.11](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.10...v3.13.11) (2026-04-23)
 
 
