@@ -4,14 +4,14 @@
 type: pipeline-cog
 
 traits:
-  - multi-flow
-  # Runs two distinct flows (conformance_check_flow and pipeline_eval).
-  # The conformance flow is registered via its own Prefect entry point and
-  # scheduled independently. CD-015 source scanner may not resolve
-  # prefect.serve() in this multi-flow structure — not a violation.
   - pipeline-cog-evaluator
   # This repo IS evaluator-cog — PIPE-011 (AI evaluation step) cannot
   # apply to the evaluator itself.
+
+# Note: multi-flow trait was removed. evaluator-cog serves exactly one
+# Prefect deployment (conformance-check); pipeline_eval.py is a library
+# module called in-process by other cogs, not a served deployment.
+# CD-015's source scanner handles the single-serve structure correctly.
 
 exemptions:
   - rule: PIPE-008
