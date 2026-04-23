@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -89,3 +90,22 @@ def _is_inside_string_literal(source: str, match_substring: str) -> bool:
         literal_hits += node.value.count(match_substring)
     total_hits = source.count(match_substring)
     return literal_hits >= total_hits
+
+
+def _is_checker_self_source(py: os.PathLike[str] | str) -> bool:
+    """True if `py` is inside the deterministic checker's own source tree.
+
+    The deterministic checkers pattern-match on literal strings like
+    ``"session.add("`` or ``"flow.deploy("`` to detect violations in other
+    repos. When a checker runs against evaluator-cog itself, those same
+    literals in the checker's own source trigger false positives — the
+    checker flags its own detection logic. Any checker that scans Python
+    source for pattern strings should skip files where this returns True.
+
+    Implementation note: we match on the POSIX-normalized path substring
+    ``/engine/deterministic/`` rather than resolving against repo_path.
+    That keeps the check robust to how the scanner was invoked (rglob on
+    ``src/`` always produces paths containing this segment for checker
+    source under ``src/evaluator_cog/engine/deterministic/``).
+    """
+    return "/engine/deterministic/" in str(py).replace("\\", "/")

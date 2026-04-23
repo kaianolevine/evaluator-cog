@@ -9,6 +9,7 @@ from pathlib import Path
 from evaluator_cog.engine.deterministic._shared import (
     Finding,
     _finding,
+    _is_checker_self_source,
     _is_inside_string_literal,
 )
 
@@ -198,6 +199,8 @@ def check_shared_resource_concurrency(repo_path: Path) -> list[Finding]:
         return findings
 
     for py_file in src.rglob("*.py"):
+        if _is_checker_self_source(py_file):
+            continue
         try:
             text = py_file.read_text()
             tree = ast.parse(text)
@@ -653,7 +656,11 @@ def check_prefect_serve_pattern(repo_path: Path) -> list[Finding]:
     if not src.is_dir():
         return findings
 
-    content = "\n".join(f.read_text(errors="replace") for f in src.rglob("*.py"))
+    content = "\n".join(
+        f.read_text(errors="replace")
+        for f in src.rglob("*.py")
+        if not _is_checker_self_source(f)
+    )
 
     # Incompatible patterns.
     if "flow.deploy(" in content or "work_pool_name" in content:

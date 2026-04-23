@@ -263,7 +263,55 @@ def test_cd012_accepts_common_python_api_client_delegation(tmp_path: Path) -> No
     assert check_clerk_m2m_auth(tmp_path, language="python") == []
 
 
+def test_is_checker_self_source_helper_positive_and_negative_cases() -> None:
+    from pathlib import Path as _Path
+
+    from evaluator_cog.engine.deterministic._shared import _is_checker_self_source
+
+    assert _is_checker_self_source(
+        _Path("src/evaluator_cog/engine/deterministic/pipeline.py")
+    )
+    assert _is_checker_self_source(
+        _Path("src/evaluator_cog/engine/deterministic/auth.py")
+    )
+    assert not _is_checker_self_source(_Path("src/evaluator_cog/engine/api_client.py"))
+    assert not _is_checker_self_source(_Path("src/evaluator_cog/flows/conformance.py"))
+
+
 # --- PIPE-002 / PIPE-005 ------------------------------------------------------
+
+
+def test_pipe004_skips_checker_self_source_literals(tmp_path: Path) -> None:
+    from evaluator_cog.engine.deterministic import check_shared_resource_concurrency
+
+    _write(
+        tmp_path,
+        "src/pkg/engine/deterministic/checker.py",
+        "from prefect import flow\n"
+        "@flow\n"
+        "def fake_checker_flow():\n"
+        '    marker = "session.add("\n'
+        "    return marker\n",
+    )
+    assert check_shared_resource_concurrency(tmp_path) == []
+
+
+def test_pipe004_still_flags_real_flow_missing_concurrency_guard(
+    tmp_path: Path,
+) -> None:
+    from evaluator_cog.engine.deterministic import check_shared_resource_concurrency
+
+    _write(
+        tmp_path,
+        "src/pkg/flows/entry.py",
+        "from prefect import flow\n"
+        "@flow\n"
+        "def write_flow(session):\n"
+        "    session.add({'x': 1})\n"
+        "    session.commit()\n",
+    )
+    findings = check_shared_resource_concurrency(tmp_path)
+    assert any(f["rule_id"] == "PIPE-004" for f in findings)
 
 
 def test_pipe002_flags_session_add_without_upsert_helpers(tmp_path: Path) -> None:
@@ -857,6 +905,20 @@ def test_cd_015_still_catches_work_pool(tmp_path: Path) -> None:
         f for f in check_prefect_serve_pattern(tmp_path) if f.get("severity") == "ERROR"
     ]
     assert len(errors) >= 1
+
+
+def test_cd_015_skips_checker_self_source_literals(tmp_path: Path) -> None:
+    from evaluator_cog.engine.deterministic import check_prefect_serve_pattern
+
+    _write(
+        tmp_path,
+        "src/pkg/engine/deterministic/foo.py",
+        "MARKERS = ['flow.deploy(', 'work_pool_name']\n",
+    )
+    findings = check_prefect_serve_pattern(tmp_path)
+    assert not any(
+        f["rule_id"] == "CD-015" and f["severity"] == "ERROR" for f in findings
+    )
 
 
 # --- API-008 ------------------------------------------------------------------

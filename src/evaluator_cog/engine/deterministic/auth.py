@@ -8,6 +8,7 @@ from pathlib import Path
 from evaluator_cog.engine.deterministic._shared import (
     Finding,
     _finding,
+    _is_checker_self_source,
     _is_inside_string_literal,
 )
 
@@ -50,7 +51,7 @@ def check_clerk_m2m_auth(repo_path: Path, *, language: str = "python") -> list[F
         rel_str = str(py).replace("\\", "/")
         if "tests/" in rel_str:
             continue
-        if "/engine/deterministic/" in rel_str:
+        if _is_checker_self_source(py):
             continue
         try:
             text = py.read_text()
