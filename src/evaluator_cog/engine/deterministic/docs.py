@@ -206,27 +206,13 @@ def check_adrs_present(repo_path: Path) -> list[Finding]:
         )
         return findings
 
-    # Accept two ADR naming conventions:
-    #   - ADR-NNN-*.md (explicit prefix)
-    #   - NNN-*.md     (adr-tools convention, numeric prefix)
-    # README.md and other non-ADR files in docs/decisions/ are ignored.
-    adr_files = [
-        p
-        for p in dec.glob("*.md")
-        if p.name != "README.md"
-        and (
-            p.name.startswith("ADR-")
-            or (len(p.name) >= 5 and p.name[:4].isdigit() and p.name[4] == "-")
-        )
-    ]
-    if not adr_files:
+    if not any(dec.glob("ADR-*.md")):
         findings.append(
             _finding(
                 "DOC-005",
                 "WARN",
                 "documentation_coverage",
-                "docs/decisions/ exists but no ADR files were found "
-                "(expected ADR-NNN-*.md or NNN-*.md).",
+                "docs/decisions/ exists but no ADR-NNN-*.md files were found.",
                 "Author numbered ADR markdown files for significant decisions.",
             )
         )

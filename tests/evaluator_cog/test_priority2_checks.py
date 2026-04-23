@@ -56,19 +56,6 @@ def test_doc005_passes_when_adr_present(tmp_path: Path) -> None:
     assert check_adrs_present(tmp_path) == []
 
 
-def test_doc005_passes_when_numeric_prefix_adr_present(tmp_path: Path) -> None:
-    _write(tmp_path, "src/big.py", _nontrivial_src_py())
-    _write(tmp_path, "docs/decisions/0001-init.md", "# ADR\n")
-    assert check_adrs_present(tmp_path) == []
-
-
-def test_doc005_flags_when_only_readme_present(tmp_path: Path) -> None:
-    _write(tmp_path, "src/big.py", _nontrivial_src_py())
-    _write(tmp_path, "docs/decisions/README.md", "# decisions\n")
-    findings = check_adrs_present(tmp_path)
-    assert any(f["rule_id"] == "DOC-005" for f in findings)
-
-
 # --- XSTACK-002 --------------------------------------------------------------
 
 
