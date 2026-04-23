@@ -1,3 +1,10 @@
+# [3.14.0](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.13...v3.14.0) (2026-04-23)
+
+
+### Features
+
+* **pipe-001:** recognize PrefectClient patterns for trigger cogs ([83b3e24](https://github.com/mini-app-polis/evaluator-cog/commit/83b3e249b51402936d3deeaf4de23488765dd845))
+
 ## [3.13.13](https://github.com/mini-app-polis/evaluator-cog/compare/v3.13.12...v3.13.13) (2026-04-23)
 
 
