@@ -148,7 +148,23 @@ def check_route_contract_tests(repo_path: Path) -> list[Finding]:
         except Exception:
             continue
 
-    untested = [r for r in route_paths if r not in test_text]
+    # Build a regex for each route. `/catalog/{id}` becomes
+    # `/catalog/[^\s"'/]+`, so concrete URLs in tests like
+    # `client.get(f"/v1/catalog/{item_id}")` or
+    # `client.get("/v1/catalog/abc123")` match. Without this, path
+    # parameters like `{id}` / `{name}` never appear literally in test
+    # code and every parametrised route was reported as untested.
+    # Routes without any `{...}` placeholder fall through to a plain
+    # substring match via `re.escape`.
+    _param_re = re.compile(r"\{[^}]+\}")
+    _param_sub = r"[^\s\"'/]+"
+
+    def _route_to_regex(route: str) -> re.Pattern[str]:
+        parts = _param_re.split(route)
+        pattern = _param_sub.join(re.escape(p) for p in parts)
+        return re.compile(pattern)
+
+    untested = [r for r in route_paths if not _route_to_regex(r).search(test_text)]
     if untested:
         sample = ", ".join(sorted(untested)[:5])
         suffix = " (and others)" if len(untested) > 5 else ""
@@ -221,7 +237,16 @@ def check_mock_assertions(repo_path: Path) -> list[Finding]:
         r"\.called\b",
     )
     _mock_verify_re = re.compile("|".join(_mock_verify_patterns))
-    _mock_create_re = re.compile(r"\b(MagicMock|AsyncMock|patch|mock_\w+)\b")
+    # Matches mock-creation tokens. The `patch` alternative uses a negative
+    # lookbehind to exclude method-call forms like `client.patch(...)` — the
+    # FastAPI test client exposes HTTP verbs as methods, and prior to this
+    # guard the bare-word match was firing on `client.patch("/v1/...")` as
+    # if it were `unittest.mock.patch(...)`. Legitimate `patch` usage is
+    # either `patch(...)` on its own or `with patch(...)`, neither of
+    # which is preceded by a `.`.
+    _mock_create_re = re.compile(
+        r"\b(?:MagicMock|AsyncMock|mock_\w+)\b|(?<!\.)\bpatch\b"
+    )
 
     # A local list binding: `name = []`, `name: Type = []`, or `name = list()`.
     _empty_list_bind_re = re.compile(
