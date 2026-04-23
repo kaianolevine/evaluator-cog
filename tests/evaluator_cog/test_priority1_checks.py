@@ -208,7 +208,8 @@ def test_pipe001_trigger_passes_with_run_deployment() -> None:
     assert check_prefect_present(root, cog_subtype="trigger") == []
 
 
-def test_pipe001_trigger_warns_without_run_deployment() -> None:
+def test_pipe001_trigger_warns_without_any_client_signal() -> None:
+    """A trigger cog with @flow but no client signals fires PIPE-001."""
     root = _root({})
     _minimal_pyproject_with_prefect(root)
     src = root / "src" / "app"
@@ -217,7 +218,45 @@ def test_pipe001_trigger_warns_without_run_deployment() -> None:
         "from prefect import flow\n@flow\ndef x():\n    pass\n"
     )
     f = check_prefect_present(root, cog_subtype="trigger")
-    assert any("run_deployment" in x["finding"].lower() for x in f)
+    assert len(f) == 1
+    assert f[0]["rule_id"] == "PIPE-001"
+    finding_text = f[0]["finding"].lower()
+    assert any(
+        signal in finding_text
+        for signal in (
+            "run_deployment",
+            "prefectclient",
+            "create_flow_run_from_deployment",
+        )
+    )
+
+
+def test_pipe001_trigger_passes_with_prefect_client() -> None:
+    """A trigger cog using PrefectClient get_client() satisfies PIPE-001."""
+    root = _root({})
+    _minimal_pyproject_with_prefect(root)
+    src = root / "src" / "app"
+    src.mkdir(parents=True)
+    (src / "trigger.py").write_text(
+        "from prefect import get_client\n"
+        "async def fire(dep_id):\n"
+        "    async with get_client() as client:\n"
+        "        await client.create_flow_run_from_deployment(deployment_id=dep_id)\n"
+    )
+    assert check_prefect_present(root, cog_subtype="trigger") == []
+
+
+def test_pipe001_trigger_passes_with_create_flow_run_only() -> None:
+    """The create_flow_run_from_deployment substring alone satisfies PIPE-001."""
+    root = _root({})
+    _minimal_pyproject_with_prefect(root)
+    src = root / "src" / "app"
+    src.mkdir(parents=True)
+    (src / "trigger.py").write_text(
+        "def fire(client, dep_id):\n"
+        "    return client.create_flow_run_from_deployment(deployment_id=dep_id)\n"
+    )
+    assert check_prefect_present(root, cog_subtype="trigger") == []
 
 
 def test_pipe001_short_circuits_when_prefect_missing() -> None:

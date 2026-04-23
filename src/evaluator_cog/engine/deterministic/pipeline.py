@@ -100,14 +100,33 @@ def check_prefect_present(
 
     py_src = "\n".join(f.read_text() for f in src.rglob("*.py"))
     if cog_subtype == "trigger":
-        if "run_deployment" not in py_src:
+        # Trigger cogs satisfy PIPE-001 by using any of the three standard
+        # Prefect client patterns for creating flow runs. The rule's
+        # check_notes explicitly lists `run_deployment` OR PrefectClient —
+        # this signal list is the implementation of that OR.
+        trigger_signals = (
+            "run_deployment",  # prefect.deployments.run_deployment helper
+            "create_flow_run_from_deployment",  # PrefectClient method
+            "get_client(",  # explicit PrefectClient pattern
+        )
+        if not any(signal in py_src for signal in trigger_signals):
             findings.append(
                 _finding(
                     "PIPE-001",
                     "WARN",
                     "pipeline_consistency",
-                    "Trigger cog source does not reference run_deployment (Prefect deployment API).",
-                    "Use Prefect's Python client to trigger downstream deployments from the watcher/trigger cog.",
+                    (
+                        "Trigger cog source does not reference Prefect's "
+                        "flow-run creation API (run_deployment, PrefectClient "
+                        "get_client(), or create_flow_run_from_deployment)."
+                    ),
+                    (
+                        "Use Prefect's Python client to trigger downstream "
+                        "deployments from the watcher/trigger cog — any of "
+                        "prefect.deployments.run_deployment(), "
+                        "prefect.get_client() + "
+                        "create_flow_run_from_deployment(), or equivalent."
+                    ),
                 )
             )
     elif "@flow" not in py_src:
