@@ -607,6 +607,39 @@ def run_conformance_check(
                 user_prompt=prompt,
             )
             llm_findings, _ = _parse_findings_from_claude(raw)
+            # Drop spurious "passing" findings — the prompt instructs the LLM
+            # to return {"findings":[]} when a rule is clean or not applicable,
+            # but it sometimes emits a finding explaining the pass instead.
+            # These are noise: they store ERROR/WARN rows that say "no violation
+            # found", which then trip EVAL-003's remediation-quality gate.
+            _passing_markers = (
+                "no violation found",
+                "passes — no",
+                "passes - no",
+                " passes.",
+                " passes —",
+                " passes -",
+                "no action needed",
+                "no finding",
+                "all clean",
+            )
+            _raw_count = len(llm_findings)
+            llm_findings = [
+                f
+                for f in llm_findings
+                if not any(
+                    m in (f.get("finding") or "").lower()
+                    or m in (f.get("suggestion") or "").lower()
+                    for m in _passing_markers
+                )
+            ]
+            _dropped = _raw_count - len(llm_findings)
+            if _dropped:
+                prefect_log.warning(
+                    "conformance: dropped %d spurious passing finding(s) for %s",
+                    _dropped,
+                    repo_id,
+                )
             prefect_log.info(
                 "conformance: %d LLM findings for %s", len(llm_findings), repo_id
             )

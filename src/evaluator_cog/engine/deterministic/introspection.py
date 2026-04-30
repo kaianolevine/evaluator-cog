@@ -115,6 +115,21 @@ def check_eval_003(
         if text.startswith("Skipped:"):
             continue
 
+        # Non-applicability gate — LLM checks emit a finding whose text
+        # explains why a rule doesn't apply (e.g. "Prefect run history is
+        # not applicable (this is an API service, not a pipeline)").
+        # These are informational notes, not actionable violations; their
+        # remediation is intentionally short or absent. Grading them for
+        # remediation length produces false positives.
+        _not_applicable_markers = (
+            "not applicable",
+            "does not apply",
+            "n/a —",
+            "n/a:",
+        )
+        if any(m in text.lower() for m in _not_applicable_markers):
+            continue
+
         # Don't recursively grade our own emissions.
         row_rule_id = str(row.get("rule_id") or row.get("violation_id") or "").strip()
         if row_rule_id == CHECK_ID:

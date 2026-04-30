@@ -151,7 +151,22 @@ def check_readme_running_locally(
         required = ["pnpm install", "pnpm dev", "pnpm test", "node"]
         missing.extend([r for r in required if r not in text])
     elif dod_type in ("new_frontend_site", "new_react_app"):
-        if "pnpm install" not in text and "npm install" not in text:
+        # A "Running locally" (or equivalent) section heading is sufficient
+        # evidence that the install step is documented — it may live in a
+        # monorepo root README or be implied by the section prose, so we
+        # don't require an explicit `pnpm install` line when the section exists.
+        _has_running_locally_section = bool(
+            re.search(
+                r"#+\s*(running locally|local development|developer setup|getting started|development setup)",
+                text,
+                re.IGNORECASE,
+            )
+        )
+        if (
+            not _has_running_locally_section
+            and "pnpm install" not in text
+            and "npm install" not in text
+        ):
             missing.append("pnpm install or npm install")
         if "pnpm build" not in text and "npm run build" not in text:
             missing.append("pnpm build or npm run build")
