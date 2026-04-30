@@ -624,22 +624,24 @@ def run_conformance_check(
                 "all clean",
             )
             _raw_count = len(llm_findings)
-            llm_findings = [
+            _dropped_findings = [
                 f
                 for f in llm_findings
-                if not any(
+                if any(
                     m in (f.get("finding") or "").lower()
                     or m in (f.get("suggestion") or "").lower()
                     for m in _passing_markers
                 )
             ]
-            _dropped = _raw_count - len(llm_findings)
-            if _dropped:
-                prefect_log.warning(
-                    "conformance: dropped %d spurious passing finding(s) for %s",
-                    _dropped,
-                    repo_id,
-                )
+            llm_findings = [f for f in llm_findings if f not in _dropped_findings]
+            if _dropped_findings:
+                for _f in _dropped_findings:
+                    prefect_log.warning(
+                        "conformance: dropped spurious passing finding for %s [%s] %s",
+                        repo_id,
+                        _f.get("rule_id") or "?",
+                        (_f.get("finding") or "")[:200],
+                    )
             prefect_log.info(
                 "conformance: %d LLM findings for %s", len(llm_findings), repo_id
             )
