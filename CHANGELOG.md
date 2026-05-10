@@ -1,3 +1,10 @@
+## [3.14.2](https://github.com/mini-app-polis/evaluator-cog/compare/v3.14.1...v3.14.2) (2026-05-10)
+
+
+### Bug Fixes
+
+* pipeline evals ([dc85bb0](https://github.com/mini-app-polis/evaluator-cog/commit/dc85bb03cd65ae39bf0004586374be3c47a3d0be))
+
 ## [3.14.1](https://github.com/mini-app-polis/evaluator-cog/compare/v3.14.0...v3.14.1) (2026-04-30)
 
 
