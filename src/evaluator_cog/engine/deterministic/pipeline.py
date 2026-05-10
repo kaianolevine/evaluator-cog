@@ -385,11 +385,17 @@ def check_final_evaluation_task(
     if not src.is_dir():
         return findings
 
+    # NOTE: ``/v1/pipeline_evaluations`` is intentionally absent. That
+    # path was a documentation bug — the canonical route is
+    # ``/v1/evaluations`` (router prefix ``/v1`` + in-router path
+    # ``/evaluations``); ``pipeline_evaluations`` is the underlying SQL
+    # table name. Cogs still on the wrong path 404 silently and produce
+    # no pipeline-health rows, so PIPE-011 must NOT treat the wrong
+    # path as evidence that an evaluation task is wired up.
     evaluation_markers = (
         "pipeline_eval",
         "evaluation_client",
         "/v1/evaluations",
-        "/v1/pipeline_evaluations",
         "PipelineEvaluator",
     )
     found_marker = False
