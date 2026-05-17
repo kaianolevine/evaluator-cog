@@ -1,3 +1,10 @@
+## [3.14.3](https://github.com/mini-app-polis/evaluator-cog/compare/v3.14.2...v3.14.3) (2026-05-17)
+
+
+### Bug Fixes
+
+* updated transcription cog references ([c0ebf0c](https://github.com/mini-app-polis/evaluator-cog/commit/c0ebf0c5c039dd30b2ed9112bd4e1f9aeb01e260))
+
 ## [3.14.2](https://github.com/mini-app-polis/evaluator-cog/compare/v3.14.1...v3.14.2) (2026-05-10)
 
 
