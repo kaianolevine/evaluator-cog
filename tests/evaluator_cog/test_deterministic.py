@@ -416,7 +416,8 @@ def test_check_dedup_handling_present_passes_when_signal_exists() -> None:
     )
     assert check_dedup_handling_present(file_level) == []
 
-    # Row-level pattern (notes-ingest-cog style).
+    # Row-level pattern (transcription-cog/process-transcript style;
+    # historically called the notes-ingest-cog pattern pre-merge).
     row_level = _make_repo(
         {
             "src/my_pkg/ingest.py": (

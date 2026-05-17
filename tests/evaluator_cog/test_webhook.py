@@ -27,7 +27,9 @@ def test_crashed_flow_posts_critical_finding() -> None:
     assert kw["source"] == "prefect_webhook"
 
 
-def test_process_transcript_maps_to_notes_ingest_cog() -> None:
+def test_process_transcript_maps_to_transcription_cog() -> None:
+    """process-transcript is the WCS-transcripts flow inside transcription-cog
+    (post-merge from the standalone notes-ingest-cog, May 2026)."""
     payload = {
         "flow_run_id": "run-pt",
         "flow_name": "process-transcript",
@@ -42,7 +44,7 @@ def test_process_transcript_maps_to_notes_ingest_cog() -> None:
 
     mock_eval.assert_called_once()
     kw = mock_eval.call_args.kwargs
-    assert kw["repo"] == "notes-ingest-cog"
+    assert kw["repo"] == "transcription-cog"
     assert kw["flow_name"] == "process-transcript"
     assert kw["source"] == "prefect_webhook"
 

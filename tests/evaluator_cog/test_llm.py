@@ -386,9 +386,17 @@ def test_flow_name_to_repo_known_flows_unchanged() -> None:
     """Known flow names still map to their correct repos."""
     from evaluator_cog.flows.pipeline_eval import _flow_name_to_repo
 
-    assert _flow_name_to_repo("process-transcript") == "notes-ingest-cog"
+    # transcription-cog (post-merge from notes-ingest-cog + voicenotes-cog,
+    # May 2026): three pipeline flow names plus the router flow itself,
+    # all under the unified transcription-cog repo identifier.
+    assert _flow_name_to_repo("transcription-cog") == "transcription-cog"
+    assert _flow_name_to_repo("process-transcript") == "transcription-cog"
+    assert _flow_name_to_repo("voicenotes-ingest") == "transcription-cog"
+    assert _flow_name_to_repo("voicenotes-cleanup") == "transcription-cog"
+    # evaluator-cog
     assert _flow_name_to_repo("conformance-check") == "evaluator-cog"
     assert _flow_name_to_repo("pipeline-eval") == "evaluator-cog"
+    # deejay-cog
     assert _flow_name_to_repo("process-new-csv-files") == "deejay-cog"
     assert _flow_name_to_repo("ingest-live-history") == "deejay-cog"
     assert _flow_name_to_repo("generate-summaries") == "deejay-cog"

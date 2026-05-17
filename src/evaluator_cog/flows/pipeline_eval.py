@@ -6,6 +6,46 @@ end of their flows, and `handle_prefect_flow_run_event` is invoked via the
 Prefect Cloud automation webhook. There is no scheduled or queued execution of
 this module — it is a library called by other services and by the webhook
 handler embedded in conformance_check_flow.
+
+TODO (May 2026): deprecate this entire module.
+---------------------------------------------
+Cogs now self-report pipeline_consistency findings directly via
+``mini_app_polis.pipeline_status.post_run_finding`` /
+``post_findings`` (single library, Clerk M2M auth, best-effort
+semantics, severity preserved verbatim, no LLM round-trip). The two
+remaining responsibilities of this module — `evaluate_pipeline_run`'s
+LLM scoring of CSV/collection runs and `handle_prefect_flow_run_event`'s
+webhook fallback — are both redundant once every cog reports through
+the library:
+
+  - The LLM-scoring path predates the self-report API. With cogs now
+    posting their own SUCCESS/WARN/ERROR with concrete counter context,
+    the LLM's job here is duplicate work that adds latency, cost, and
+    one more thing that can drift.
+  - The webhook fallback was useful when a cog could die before
+    reaching its own end-of-run report. With the failure hooks
+    (`make_failure_hook` in mini_app_polis.pipeline_status) wired into
+    every production flow's on_failure / on_crashed, the webhook path
+    is also redundant for any cog using the library.
+
+Plan, in order:
+
+  1. Confirm every production flow in the fleet (deejay-cog,
+     transcription-cog) is wired through the library shim with a
+     failure hook. Done.
+  2. Stand the webhook automation in Prefect Cloud down (or repoint it
+     at a no-op endpoint) so `handle_prefect_flow_run_event` stops
+     receiving traffic.
+  3. Delete `evaluate_pipeline_run`, `handle_prefect_flow_run_event`,
+     `_FLOW_REPO_MAP`, `_flow_name_to_repo`, and the rest of this file.
+     Drop the unused dependency on `evaluator_cog.engine.llm._build_prompt_*`.
+  4. Strip evaluator-cog tests for this module (test_webhook.py and
+     the `_flow_name_to_repo` block of test_llm.py).
+  5. Remove evaluator-cog as a runtime dependency of any cog that no
+     longer needs it — only conformance-checking remains.
+
+See ecosystem-standards/BACKLOG.md (#pipeline-eval-deprecation) for
+the tracked work item.
 """
 
 from __future__ import annotations
@@ -76,8 +116,17 @@ _FLOW_REPO_MAP: dict[str, str] = {
     # evaluator-cog flows
     "conformance-check": "evaluator-cog",
     "pipeline-eval": "evaluator-cog",
-    # notes-ingest-cog flows
-    "process-transcript": "notes-ingest-cog",
+    # transcription-cog flows (May 2026: merged from the standalone
+    # notes-ingest-cog and voicenotes-cog repos; see ADR-004 in
+    # transcription-cog). All three production flow names below ship in
+    # one Railway service under the unified transcription-cog repo
+    # identifier; the router flow's own name is also included so a
+    # webhook event for the router itself doesn't fall through to
+    # "unknown".
+    "transcription-cog": "transcription-cog",
+    "process-transcript": "transcription-cog",
+    "voicenotes-ingest": "transcription-cog",
+    "voicenotes-cleanup": "transcription-cog",
     # deejay-cog flows (production)
     "process-new-csv-files": "deejay-cog",
     "ingest-live-history": "deejay-cog",
